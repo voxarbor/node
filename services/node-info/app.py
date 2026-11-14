@@ -4,6 +4,7 @@ Schema is versioned (`schema`); fields are only ever added. GET /health is open.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import secrets
@@ -84,6 +85,12 @@ def capabilities() -> dict:
                      busy=h.get("busy"), queue_max=h.get("queue_max"))
             if name == "tts":
                 s.update(jobs=h.get("jobs"), **{k: v for k, v in st.get("tts", {}).items()})
+                try:  # lets a coordinator check cheaply that this node's stress lexicon matches its source
+                    lex = get(f"{url}/v1/lexicon", timeout=5)["text"]
+                    s["lexicon_sha256"] = hashlib.sha256(lex.encode("utf-8")).hexdigest()
+                    s["lexicon_rules"] = sum(1 for l in lex.splitlines() if l.strip() and not l.strip().startswith("#"))
+                except Exception:
+                    s["lexicon_sha256"] = None
                 s["endpoints"] = ["/v1/audio/speech", "/v1/audio/speech/stream", "/v1/jobs", "/v1/voices",
                                   "/v1/text/prepare", "/v1/text/phonemize", "/v1/warmup"]
             elif name == "translate":

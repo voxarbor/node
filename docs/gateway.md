@@ -46,6 +46,8 @@ timeouts are 30–60 min.
 
 Fields are only added within a schema version. `services.<name>.available` = reachable, `healthy` = its health is OK,
 `busy` = jobs submitted and not finished, `queue_max` = above it the service answers 429, `loaded` = models in RAM.
+`tts.lexicon_sha256` (sha256 of the lexicon file text, as `GET /tts/v1/lexicon` returns it) and `lexicon_rules`
+let a coordinator check that a node's stress lexicon matches its source; push a new one with `PUT /tts/v1/lexicon`.
 TTS gives every voice's `genders` (male | female | child) and display `labels`; `voices` order = priority (favorites
 first). Real example from a test node (lists shortened with "..."; `local_ai_version` is a deprecated alias of
 `voice_core_version`):
