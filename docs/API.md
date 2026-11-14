@@ -46,6 +46,36 @@ Errors: `{"detail": "..."}` with 4xx/5xx; `429` = the model worker is busy (retr
   `Т. Г. Шевченко => Тарас Григорович Шевченко` / `т. зв. => так званий` (replace: any other text, `+` optional;
   "Т.Г." matches "Т. Г." too).
 
+## Custom voices (zero-shot Holos, since 0.9.0)
+
+A new Holos voice from a reference recording, without training: the encoder turns the recording into a vector of
+256 numbers, and synthesis uses that vector instead of a preset. Only the owner's own voice or voices whose owners
+gave explicit consent; every installed voice carries the coordinator's `consent_ref`.
+
+Best reference: one speaker, 15-30 s of continuous natural speech, close microphone, no music / reverb / noise, no
+clipping, the same style as the wanted output. Zero-shot gives a *similar* voice, not an identical one.
+
+- `POST /v1/voices/encode` (multipart, field `audio`: any format ffmpeg reads, max 50 MB, 3 s .. 300 s; over 90 s only
+  the first 90 s are used) -> `{vector: [256 float], sha256, dim: 256, model: "holos@<rev12>", duration_s, peak,
+  speech_level_db, snr_db, part_similarity, warnings: [{code, detail}]}`. Nothing is stored on the node (audio
+  deleted, vector only in the reply). Runs in the TTS worker (queue as for synthesis: 429 when full); ~5-12 s on CPU.
+  Warning codes: `short` (< 10 s), `long` (> 90 s, cut), `clipping`, `quiet` (speech < -35 dBFS), `noisy`
+  (speech/background < 20 dB), `little_speech` (< 40 % of the recording), `several_speakers` (parts of the recording
+  give different voices: `part_similarity` < 0.80; one voice is ~0.98, two ~0.40; checked from 15 s).
+  Errors: 413 > 50 MB; 422 unreadable audio or shorter than 3 s.
+- `PUT /v1/voices/custom/{id}` `{name (1-64), gender: male|female|child, vector: [256], sha256, consent_ref (1-200)}`
+  -> `{id, voice: "custom:<id>", sha256, status: created|replaced}`. `id`: 1-48 of `a-z 0-9 _ -`, starting with a
+  letter or digit. `sha256` = sha256 of the vector packed as 256 little-endian float32 (the same value encode
+  returns). Errors: 400 bad id or sha256 mismatch; 422 missing/invalid field (e.g. no consent_ref, vector not 256);
+  409 the node already holds `TTS_CUSTOM_MAX` (500) voices. Stored in `/cache/custom-voices/<id>.json`.
+- `DELETE /v1/voices/custom/{id}` -> `{id, status: "deleted"}`; 404 when missing.
+- `GET /v1/voices/custom` -> `{zero_shot: true, finetune: false, voices: {id: {name, gender, sha256, consent_ref,
+  created}}}` (no vectors).
+- Use: `voice: "custom:<id>"` in every synthesis endpoint and job (engine holos; 422 for an unknown id or another
+  engine). `GET /v1/voices` lists them after the presets with `meta: {gender, label, name, custom: true, sha256}`.
+- `/capabilities` (node-info): `services.tts.voice_create: {zero_shot, finetune}` and `services.tts.custom_voices:
+  {id: sha256}`, so a coordinator can keep every node in sync by hash (PUT on mismatch, DELETE extras).
+
 ## Jobs = synthesis with history (long texts, streaming playback in the UI)
 
 Job object:

@@ -17,7 +17,8 @@ RUN --mount=type=cache,target=/root/.cache/pip PIP_NO_CACHE_DIR=0 pip install -r
 # HolosTTS PyTorch FP32 weights (default, the reference) + ONNX INT8 bundle (HOLOS_BACKEND=onnx-int8), accentuk assets (stress lexicon, CT2 INT8 models, spaCy uk_core_news_sm)
 # live in the image: small, read-only and needed offline. (Xet downloads from HF hang/fail here: disabled.)
 ARG HOLOS_REVISION=5d40fbaa99e55ebd3359a161bc86728ffdbd5c5f
-RUN python -c "from huggingface_hub import snapshot_download as d; d('patriotyk/HolosTTS', revision='$HOLOS_REVISION', local_dir='/opt/holos', allow_patterns=['holos.pt', 'voices.pt', 'onnx-int8/*', 'LICENSE'])" \
+ENV HOLOS_REVISION=${HOLOS_REVISION}
+RUN python -c "from huggingface_hub import snapshot_download as d; d('patriotyk/HolosTTS', revision='$HOLOS_REVISION', local_dir='/opt/holos', allow_patterns=['holos.pt', 'voices.pt', 'voice_encoder.pt', 'onnx-int8/*', 'LICENSE'])" \
     && python -c "import torch, json; v = torch.load('/opt/holos/voices.pt', map_location='cpu'); json.dump(list(v['names'] if isinstance(v, dict) and 'names' in v else v), open('/opt/holos/voices.json', 'w'), ensure_ascii=False)" \
     && rm -rf /opt/holos/.cache && accentuk download --light --tts --directory /opt/accentuk
 # Voice style vectors (*.pt, git-lfs) from the HF Space, pinned to a commit.

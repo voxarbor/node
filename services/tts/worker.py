@@ -71,10 +71,41 @@ def voice_names(engine: str = "styletts2") -> list[str]:
     return _uk_sorted(os.path.basename(p)[:-3] for p in glob.glob(os.path.join(VOICES_DIR, "*.pt")))
 
 
+# Custom Holos voices (zero-shot, from a reference recording): one JSON file per voice {id, name, gender, vector[256],
+# sha256, consent_ref, created}; installed by the coordinator with PUT /v1/voices/custom/{id}. Requests use "custom:<id>".
+CUSTOM_DIR = os.environ.get("TTS_CUSTOM_VOICES", "/cache/custom-voices")
+VECTOR_DIM = 256
+
+
+def custom_voices() -> dict[str, dict]:
+    """{id: voice record}, read from files only (no ML imports: the API process calls this)."""
+    out = {}
+    for p in sorted(glob.glob(os.path.join(CUSTOM_DIR, "*.json"))):
+        try:
+            v = json.load(open(p, encoding="utf-8"))
+            out[v["id"]] = v
+        except (OSError, ValueError, KeyError):
+            continue
+    return out
+
+
+def custom_vector(voice_id: str) -> list[float]:
+    try:
+        return json.load(open(os.path.join(CUSTOM_DIR, f"{voice_id}.json"), encoding="utf-8"))["vector"]
+    except OSError:
+        raise ValueError(f"unknown custom voice {voice_id!r}; see GET /v1/voices") from None
+
+
 def resolve_voice(engine: str, voice: str | None) -> str:
-    """None/"male"/"male2"/"female"/... -> the engine's favorites; otherwise a preset name of that engine."""
-    names = voice_names(engine)
+    """None/"male"/"male2"/"female"/... -> the engine's favorites; "custom:<id>" (Holos); else a preset name."""
     voice = (voice or "male").strip()
+    if voice.startswith("custom:"):
+        if engine != "holos":
+            raise ValueError("custom voices are Holos voices: use engine holos")
+        if not os.path.isfile(os.path.join(CUSTOM_DIR, f"{voice[7:]}.json")):
+            raise ValueError(f"unknown custom voice {voice[7:]!r}; see GET /v1/voices")
+        return voice
+    names = voice_names(engine)
     voice = ALIASES.get(engine, {}).get(voice.lower()) or voice
     if voice not in names:
         raise ValueError(f"unknown {engine} voice {voice!r}; see GET /v1/voices")
@@ -288,6 +319,8 @@ def _holos():
                          voices_path=os.path.join(HOLOS_DIR, "voices.pt"))
 
             def gen(ps, voice, speed):
+                if voice.startswith("custom:"):
+                    voice = torch.tensor(custom_vector(voice[7:]), dtype=torch.float32)
                 with torch.inference_mode():
                     return m.generate(ps, voice, speed=speed).squeeze().cpu().numpy().astype(np.float32)
         else:
@@ -301,6 +334,8 @@ def _holos():
             m = HolosTTS(os.path.join(HOLOS_DIR, HOLOS_BACKEND), session_options=so)
 
             def gen(ps, voice, speed):
+                if voice.startswith("custom:"):
+                    voice = np.asarray(custom_vector(voice[7:]), dtype=np.float32)
                 return np.asarray(m.generate(ps, voice, speed=speed), dtype=np.float32).squeeze()
         _holos_model = gen
     return _holos_model
@@ -368,3 +403,70 @@ def prepare(text: str, do_verbalize: bool) -> dict:
     if do_verbalize:
         text = verbalize(text)
     return {"text": text, "stressed": [_prepare(p) for p in split_to_parts(text) if p.strip()]}
+
+
+_encoder = None
+
+
+def encode_voice(wav_path: str) -> dict:
+    """Reference recording (24 kHz mono WAV) -> Holos voice vector + quality warnings. Runs in the worker process."""
+    global _encoder
+    import numpy as np
+    import soundfile as sf
+    import torch
+    from holos.models import VoiceEncoder
+
+    if _encoder is None:
+        _encoder = VoiceEncoder(os.path.join(HOLOS_DIR, "voice_encoder.pt"), device=device())
+    x, sr = sf.read(wav_path, dtype="float32")
+    if x.ndim > 1:
+        x = x.mean(1)
+    dur = len(x) / sr
+    warnings = []
+    if dur < 10:
+        warnings.append({"code": "short", "detail": f"{dur:.0f} s: 15-30 s of continuous speech gives a closer voice"})
+    if dur > 90:
+        warnings.append({"code": "long", "detail": "only the first 90 s are used"})
+        x = x[: int(90 * sr)]
+    peak = float(np.abs(x).max()) if len(x) else 0.0
+    clip = float((np.abs(x) > 0.985).mean()) if len(x) else 0.0
+    if clip > 0.001:
+        warnings.append({"code": "clipping", "detail": f"{clip:.1%} of samples are clipped: record quieter"})
+    frame = int(0.03 * sr)
+    n = len(x) // frame
+    rms_db = 20 * np.log10(np.sqrt((x[: n * frame].reshape(n, frame) ** 2).mean(1)) + 1e-9) if n else np.array([-120.0])
+    loud = float(np.percentile(rms_db, 90))
+    if loud < -35:
+        warnings.append({"code": "quiet", "detail": f"speech level {loud:.0f} dBFS: record louder or closer"})
+    snr = float(np.percentile(rms_db, 90) - np.percentile(rms_db, 10))
+    if snr < 20:
+        warnings.append({"code": "noisy", "detail": f"speech/background ~{snr:.0f} dB: background noise or music"})
+    voiced = rms_db > (np.percentile(rms_db, 90) - 25)
+    if n and voiced.mean() < 0.4:
+        warnings.append({"code": "little_speech", "detail": f"speech in {voiced.mean():.0%} of the recording"})
+
+    def enc(seg):  # the encoder reads files (it resamples and builds the mel itself)
+        tmp = wav_path + ".part.wav"
+        sf.write(tmp, seg, sr)
+        try:
+            return _encoder(tmp)
+        finally:
+            os.remove(tmp)
+
+    with torch.inference_mode():
+        vec = enc(x).squeeze().float().cpu()
+        speakers = None
+        if dur >= 15:  # several speakers: the parts of one recording should give close vectors
+            k = 3
+            parts = [enc(x[i * len(x) // k:(i + 1) * len(x) // k]).squeeze().float().cpu()[:128] for i in range(k)]
+            sims = [float(torch.nn.functional.cosine_similarity(a, b, dim=0)) for i, a in enumerate(parts) for b in parts[i + 1:]]
+            speakers = round(min(sims), 3)
+            if speakers < SPEAKER_SIM_MIN:
+                warnings.append({"code": "several_speakers",
+                                 "detail": f"parts of the recording sound like different voices (similarity {speakers})"})
+    return {"vector": [round(float(v), 6) for v in vec.tolist()], "duration_s": round(dur, 2),
+            "peak": round(peak, 3), "speech_level_db": round(loud, 1), "snr_db": round(snr, 1),
+            "part_similarity": speakers, "warnings": warnings}
+
+
+SPEAKER_SIM_MIN = float(os.environ.get("TTS_SPEAKER_SIM_MIN", "0.80"))  # one voice ~0.98, two voices ~0.40 (2026-11-14)

@@ -16,7 +16,7 @@ from urllib.parse import quote
 from concurrent.futures import ProcessPoolExecutor
 
 import uvicorn
-from fastapi import Depends, FastAPI, HTTPException, Query, Request
+from fastapi import Depends, FastAPI, File, HTTPException, Query, Request, UploadFile
 from fastapi.responses import FileResponse, PlainTextResponse, Response, StreamingResponse
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from pydantic import BaseModel, Field
@@ -111,7 +111,7 @@ class SpeechRequest(BaseModel):
     text: str | None = Field(None, description="Ukrainian text; '+' after a vowel marks stress")
     input: str | None = Field(None, description="Alias of text (OpenAI /v1/audio/speech)")
     engine: str | None = Field(None, description="'styletts2' or 'holos' (default TTS_DEFAULT_ENGINE)")
-    voice: str | None = Field(None, description="Preset name or a favorite alias (male, male2, male3, female, female2); omitted = male")
+    voice: str | None = Field(None, description="Preset name, a favorite alias (male, male2, male3, female, female2) or custom:<id> (Holos); omitted = male")
     speed: float = Field(1.0, ge=0.5, le=2.0)
     model: str = Field("multi", description="styletts2 only: 'multi' (31 voices) or 'single' (one male voice)")
     verbalize: bool = Field(False, description="Spell out numbers/abbreviations first (seq2seq model)")
@@ -314,6 +314,11 @@ def voices_info() -> dict:
         engines[engine] = {"default": aliases.get("male") or (favorites or names)[0], "aliases": aliases,
                            "favorites": favorites, "voices": favorites + [n for n in names if n not in favorites],
                            "meta": voice_meta(engine, names)}
+    if "holos" in engines:  # custom (zero-shot) voices after the presets
+        for vid, v in worker.custom_voices().items():
+            engines["holos"]["voices"].append(f"custom:{vid}")
+            engines["holos"]["meta"][f"custom:{vid}"] = {"gender": v["gender"], "label": v["name"], "name": v["name"],
+                                                       "custom": True, "sha256": v["sha256"]}
     if "styletts2" in engines:
         engines["styletts2"]["models"] = {"multi": "the voices above", "single": "one male narrator (voice ignored)"}
     return {"default_engine": worker.DEFAULT_ENGINE, "default_voice": engines[worker.DEFAULT_ENGINE]["default"],
@@ -324,6 +329,97 @@ def voices_info() -> dict:
 @app.get("/voices", dependencies=[Depends(auth)], include_in_schema=False)
 async def voices() -> dict:
     return voices_info()
+
+
+# --- custom voices (zero-shot Holos): encode a reference recording; install / delete a voice by id ----------------
+VOICE_ID = r"^[a-z0-9][a-z0-9_-]{0,47}$"
+ENCODE_MAX_BYTES = 50 * 1024 * 1024
+CUSTOM_MAX = int(os.environ.get("TTS_CUSTOM_MAX", "500"))
+
+
+def vector_sha256(vector: list[float]) -> str:
+    """sha256 of the vector as 256 little-endian float32 (what the coordinator stores and compares)."""
+    import hashlib
+    import struct
+
+    return hashlib.sha256(struct.pack(f"<{len(vector)}f", *vector)).hexdigest()
+
+
+@app.post("/v1/voices/encode", dependencies=[Depends(auth)])
+async def voices_encode(request: Request, audio: UploadFile = File(...)) -> dict:
+    """Reference recording (any format ffmpeg reads, 3 s .. 50 MB) -> {vector, sha256, model, duration_s, warnings}.
+    Nothing is stored: the audio is deleted when the vector is ready, the vector lives only in the reply."""
+    import tempfile
+
+    with tempfile.TemporaryDirectory(prefix="enc-") as tmp:
+        src, wav = os.path.join(tmp, "in"), os.path.join(tmp, "ref.wav")
+        size = 0
+        with open(src, "wb") as f:
+            while chunk := await audio.read(1 << 20):
+                size += len(chunk)
+                if size > ENCODE_MAX_BYTES:
+                    raise HTTPException(413, "audio larger than 50 MB")
+                f.write(chunk)
+        p = await asyncio.create_subprocess_exec("ffmpeg", "-nostdin", "-loglevel", "error", "-y", "-i", src, "-t", "300",
+                                                 "-ac", "1", "-ar", "24000", "-c:a", "pcm_s16le", wav,
+                                                 stderr=asyncio.subprocess.PIPE)
+        _, err = await p.communicate()
+        if p.returncode != 0 or not os.path.isfile(wav):
+            raise HTTPException(422, f"not a readable audio file: {err.decode(errors='replace')[-200:]}")
+        if os.path.getsize(wav) < 3 * 24000 * 2:
+            raise HTTPException(422, "too short: give at least 3 s (15-30 s of continuous speech is best)")
+        out = await run(worker.encode_voice, wav, request=request)
+    out["sha256"] = vector_sha256(out["vector"])
+    out["model"] = f"holos@{os.environ.get('HOLOS_REVISION', 'unknown')[:12]}"
+    out["dim"] = len(out["vector"])
+    return out
+
+
+class CustomVoice(BaseModel):
+    name: str = Field(..., min_length=1, max_length=64, description="display name")
+    gender: str = Field(..., pattern=r"^(male|female|child)$")
+    vector: list[float] = Field(..., min_length=256, max_length=256, description="from POST /v1/voices/encode")
+    sha256: str = Field(..., pattern=r"^[0-9a-f]{64}$", description="sha256 of the vector as 256 LE float32")
+    consent_ref: str = Field(..., min_length=1, max_length=200, description="the coordinator's consent record")
+
+
+@app.put("/v1/voices/custom/{voice_id}", dependencies=[Depends(auth)])
+async def voices_custom_put(voice_id: str, req: CustomVoice) -> dict:
+    """Install (or replace) a custom voice on this node; requests then use voice="custom:<id>" (engine holos)."""
+    import re as _re
+
+    if not _re.fullmatch(VOICE_ID, voice_id):
+        raise HTTPException(400, "id: 1-48 of a-z 0-9 _ - (starting with a letter or digit)")
+    if vector_sha256(req.vector) != req.sha256:
+        raise HTTPException(400, "sha256 does not match the vector (256 little-endian float32)")
+    os.makedirs(worker.CUSTOM_DIR, exist_ok=True)
+    path = os.path.join(worker.CUSTOM_DIR, f"{voice_id}.json")
+    existed = os.path.isfile(path)
+    if not existed and len(worker.custom_voices()) >= CUSTOM_MAX:
+        raise HTTPException(409, f"this node holds the maximum of {CUSTOM_MAX} custom voices")
+    rec = {"id": voice_id, **req.model_dump(), "created": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())}
+    tmp = path + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as f:
+        json.dump(rec, f, ensure_ascii=False)
+    os.replace(tmp, path)
+    return {"id": voice_id, "voice": f"custom:{voice_id}", "sha256": req.sha256, "status": "replaced" if existed else "created"}
+
+
+@app.delete("/v1/voices/custom/{voice_id}", dependencies=[Depends(auth)])
+async def voices_custom_delete(voice_id: str) -> dict:
+    path = os.path.join(worker.CUSTOM_DIR, f"{voice_id}.json")
+    if "/" in voice_id or not os.path.isfile(path):
+        raise HTTPException(404, "no such custom voice")
+    os.remove(path)
+    return {"id": voice_id, "status": "deleted"}
+
+
+@app.get("/v1/voices/custom", dependencies=[Depends(auth)])
+async def voices_custom_list() -> dict:
+    """{voices: {id: {name, gender, sha256, consent_ref, created}}} without the vectors (cheap: for /capabilities)."""
+    return {"zero_shot": True, "finetune": False,
+            "voices": {k: {f: v.get(f) for f in ("name", "gender", "sha256", "consent_ref", "created")}
+                       for k, v in worker.custom_voices().items()}}
 
 
 @app.post("/v1/audio/speech", dependencies=[Depends(auth)])

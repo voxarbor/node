@@ -112,8 +112,16 @@ def capabilities() -> dict:
                     s["lexicon_rules"] = sum(1 for l in lex.splitlines() if l.strip() and not l.strip().startswith("#"))
                 except Exception:
                     s["lexicon_sha256"] = None
+                try:  # custom (zero-shot) voices: the coordinator syncs them by sha256, like the lexicon
+                    cv = get(f"{url}/v1/voices/custom", timeout=5)
+                    s["voice_create"] = {"zero_shot": cv.get("zero_shot", True), "finetune": cv.get("finetune", False)}
+                    s["custom_voices"] = {k: v.get("sha256") for k, v in cv.get("voices", {}).items()}
+                except Exception:  # an older TTS image
+                    s["voice_create"] = {"zero_shot": False, "finetune": False}
+                    s["custom_voices"] = {}
                 s["endpoints"] = ["/v1/audio/speech", "/v1/audio/speech/stream", "/v1/jobs", "/v1/voices",
-                                  "/v1/text/prepare", "/v1/text/phonemize", "/v1/warmup"]
+                                  "/v1/text/prepare", "/v1/text/phonemize", "/v1/warmup", "/v1/voices/encode",
+                                  "/v1/voices/custom"]
             elif name == "translate":
                 s.update(opus_pairs=h.get("opus_pairs"), fallback_model=h.get("fallback_model"),
                          punctuation_model="1-800-BAD-CODE/xlm-roberta_punctuation_fullstop_truecase",
