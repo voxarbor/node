@@ -1,0 +1,21 @@
+numpy==1.26.4
+transformers==5.0.0
+huggingface-hub>=1.16,<2
+ctranslate2==4.6.0
+sentencepiece==0.2.1
+stanza==1.10.1
+marisa-trie==1.2.1
+six==1.17.0
+librosa==0.11.0
+scipy==1.15.3
+soundfile==0.13.1
+einops==0.8.1
+einops-exts==0.0.4
+munch==4.0.0
+pyyaml==6.0.3
+fastapi==0.162.0
+uvicorn==0.54.0
+gradio==6.31.0
+ukrainian_accentor @ git+https://github.com/egorsmkv/ukrainian-accentor@3dff5ecd2ac91e879086c0e2a7f1ce079603c9f1
+ipa-uk @ git+https://github.com/patriotyk/ipa-uk@3faf05ec50fd4880965b6c76f8e479a4f82117f5
+styletts2-inference @ git+https://github.com/patriotyk/styletts2-inference@209352700cf703a05ff94501290095dd9072fd5f

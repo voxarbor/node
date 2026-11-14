@@ -1,0 +1,29 @@
+# TTS stress lexicon: applied before automatic stress. "+" goes right after the stressed vowel.
+# Edit this file (TTS_LEXICON, default /config/tts-lexicon.txt), or use GET/PUT/POST/DELETE /v1/lexicon
+# tts_lexicon. Reloaded automatically on change. Rule kinds:
+#   word:   наприкінці => наприкі+нці                          every occurrence of the whole word, any case
+#   phrase: замок на дверях => замо+к на дверях                whole-word phrase, any case and spacing
+#   regex:  ~ (?<=\bваш\s)замок\b => за+мок                    case-insensitive; the match is replaced, so keep
+#                                                              it to the word itself with lookarounds
+# "++" stresses and lengthens the vowel (за++мок -> ˈzaːmɔk) where plain stress sounds too weak.
+# Words already marked with "+" in the input are never changed.
+
+# words the automatic stress gets wrong (bench/tts-stress)
+наприкінці => наприкі+нці
+захистимо => захисти+мо
+
+# за́мок (castle): possessives/adjectives, building and defending (Minecraft) contexts; "++" because
+# HolosTTS barely lengthens the stressed а in running speech (picked by ear)
+~ (?<=\b(?:ваш|свій|твій|мій|наш|їхній|цей|той|великий|величезний|старовинний|середньовічний|кам'яний|кам’яний|королівський)\s+)замок\b => за++мок
+~ (?<=\b(?:побудувати|побудуємо|побудую|побудуй|побудував|збудувати|збудуємо|збудую|збудуй|збудував|будуємо|будувати|захистити|захистимо|захистіть|штурмувати|обороняти)\s+(?:\w+\s+)?)замок\b => за++мок
+~ \bзамок(?=\s+(?:від|для|проти)\s+(?:гріфер|ворог|зомбі|моб|кріпер|крипер|рейдер))  => за++мок
+~ \bзамок(?=\s+(?:на|у|в)\s+(?:горі|пагорбі|скелі|острові)) => за++мок
+
+# замо́к (lock)
+замок на дверях => замо+к на дверях
+~ \bзамок(?=\s+(?:на|від|у|в)\s+(?:двер|скрин|сейф|воріт|ворота|шаф|сундук))  => замо+к
+~ (?<=\b(?:відчинити|відчинив|відімкнути|відімкнув|відкрити|зламати|зламав|повісити|повісив|кодовий|навісний|дверний|ключ\s+від|ключем\s+від)\s+)замок\b => замо+к
+
+# во́ди (nom. pl. "waters") vs води́ (gen. sg.), only where the plural is clear
+~ \bводи(?=\s+(?:океану|океанів|моря|морів|річки|річок|озера|озер|Дніпра)\b) => во+ди
+~ (?<=\b(?:морські|океанські|підземні|глибокі|тихі|холодні|теплі|прозорі|талі|ґрунтові|стічні|весняні)\s+)води\b => во+ди

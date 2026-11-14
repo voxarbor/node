@@ -1,0 +1,35 @@
+voice-core
+Copyright 2026 voxarbor
+
+The code in this repository is licensed under the Apache License 2.0 (see LICENSE). The services download or
+contain third-party models and libraries under their own licenses:
+
+Speech-to-text
+- speaches (container image ghcr.io/speaches-ai/speaches) - MIT
+- Whisper large-v3-turbo, OpenAI (CTranslate2 conversion deepdml/faster-whisper-large-v3-turbo-ct2) - MIT
+
+Text-to-speech
+- HolosTTS, patriotyk/HolosTTS (weights and package holos-tts) - MIT. Default engine.
+- StyleTTS2-ukrainian, patriotyk/styletts2_ukrainian_single (MIT), patriotyk/styletts2_ukrainian_multispeaker
+  (license not stated on the model page) and the preset voices of the Space patriotyk/styletts2-ukrainian (MIT).
+  OPT-IN (TTS_ENGINES=holos,styletts2): the multi-speaker preset voices are named after real narrators; make sure
+  you may use them before publishing anything made with them.
+- accentuk (stress and number verbalization) - Apache-2.0; ukrainian-word-stress - MIT; ipa-uk; stanza - Apache-2.0
+- skypro1111/m2m100-ukr-verbalization (optional verbalizer) - MIT
+
+Translation and punctuation
+- Opus-MT tc-big models, Helsinki-NLP (University of Helsinki), converted to CTranslate2 - CC-BY-4.0
+- NLLB-200 distilled 600M, Meta (CTranslate2 conversion JustFrederik/nllb-200-distilled-600M-ct2-int8) -
+  CC-BY-NC-4.0, NON-COMMERCIAL ONLY. OPT-IN (TRANSLATE_NLLB=1), off by default.
+- 1-800-BAD-CODE/xlm-roberta_punctuation_fullstop_truecase - Apache-2.0
+- py3langid - BSD-3-Clause; CTranslate2 - MIT; sentencepiece - Apache-2.0
+
+Speaker diarization
+- sherpa-onnx (k2-fsa) - Apache-2.0
+- pyannote/segmentation-3.0 (CNRS) - MIT
+- WeSpeaker ResNet34 VoxCeleb (Wespeaker/wespeaker-voxceleb-resnet34-LM) - CC-BY-4.0
+- services/diarize/gender_lr.npz: a small classifier trained on the speaker embeddings of HolosTTS/StyleTTS2
+  preset voices (tools/diarize_gender_train.py)
+
+Web UI / gateway
+- Caddy - Apache-2.0

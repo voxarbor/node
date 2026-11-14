@@ -1,0 +1,643 @@
+"""Ukrainian TTS API (engines StyleTTS2-ukrainian and HolosTTS, CPU) + the web UI on a second port (see API.md).
+Models are loaded in a worker process on the first request and the process is stopped after IDLE_TTL seconds
+without requests, so the idle service holds only this API process. Long texts are split into sentence groups
+(speech.py) that are synthesized one by one: streamed (/v1/audio/speech/stream) or as jobs with history (jobs.py)."""
+
+import asyncio
+import io
+import multiprocessing
+import os
+import secrets
+import subprocess
+import json
+import re
+import time
+from urllib.parse import quote
+from concurrent.futures import ProcessPoolExecutor
+
+import uvicorn
+from fastapi import Depends, FastAPI, HTTPException, Query, Request
+from fastapi.responses import FileResponse, PlainTextResponse, Response, StreamingResponse
+from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
+from pydantic import BaseModel, Field
+
+import jobs
+import lexicon
+import phonemize
+import speech as speechtext
+import worker
+
+API_KEY = os.environ["API_KEY"]
+IDLE_TTL = int(os.environ.get("IDLE_TTL", "600"))
+ENABLE_UI = os.environ.get("ENABLE_UI", "true").lower() == "true"
+MAX_CHARS = int(os.environ.get("TTS_MAX_CHARS", "5000"))  # one-shot /v1/audio/speech
+LONG_MAX_CHARS = int(os.environ.get("TTS_LONG_MAX_CHARS", "300000"))  # stream and jobs
+FORMATS = {"wav": "audio/wav", "mp3": "audio/mpeg", "opus": "audio/ogg", "flac": "audio/flac"}
+
+app = FastAPI(title="tts")
+bearer = HTTPBearer(auto_error=False)
+_pool: ProcessPoolExecutor | None = None
+_last_used = 0.0
+_busy = 0  # jobs submitted and not finished
+_lock = asyncio.Lock()
+QUEUE_MAX = int(os.environ.get("QUEUE_MAX", "8"))
+
+
+def auth(cred: HTTPAuthorizationCredentials | None = Depends(bearer)) -> None:
+    if not cred or not secrets.compare_digest(cred.credentials, API_KEY):
+        raise HTTPException(401, "invalid api key")
+
+
+async def _reaper() -> None:
+    global _pool
+    while True:
+        await asyncio.sleep(30)
+        async with _lock:
+            if not _pool or _busy or time.monotonic() - _last_used <= IDLE_TTL:
+                continue
+            pool, _pool = _pool, None
+        await asyncio.to_thread(pool.shutdown)  # off the event loop: the API stays responsive meanwhile
+
+
+async def run(fn, *args, request: Request | None = None):
+    """Run fn(*args) in the model worker process (started on demand). At most QUEUE_MAX jobs wait or run (429
+    above that); a job still waiting when its HTTP client disconnects is dropped instead of computed."""
+    global _pool, _last_used, _busy
+    async with _lock:
+        if _busy >= QUEUE_MAX:
+            raise HTTPException(429, f"busy: {QUEUE_MAX} jobs queued, retry later")
+        if _pool is None:
+            _pool = ProcessPoolExecutor(1, mp_context=multiprocessing.get_context("spawn"), initializer=worker.init)
+        future = _pool.submit(fn, *args)
+        _busy += 1
+    try:
+        waiter = asyncio.wrap_future(future)
+        while request is not None:
+            done, _ = await asyncio.wait([waiter], timeout=1)
+            if done:
+                break
+            if await request.is_disconnected():
+                future.cancel()  # no effect once the worker has started it
+                raise HTTPException(499, "client disconnected")
+        return await waiter
+    finally:
+        _busy -= 1
+        _last_used = time.monotonic()
+
+
+def encode(pcm: bytes, fmt: str, sample_rate: int | None) -> bytes:
+    """Model output is float32 mono at 24 kHz. wav/flac: 24-bit at the native rate (lossless). mp3: 320k, which
+    needs >= 32 kHz, so it is resampled to 48 kHz (soxr, high precision). opus: 48 kHz (its native rate), 160k."""
+    import numpy as np
+    import soundfile as sf
+
+    audio = np.frombuffer(pcm, dtype=np.float32)
+    buf = io.BytesIO()
+    if fmt == "wav" and not sample_rate:
+        sf.write(buf, audio, worker.SAMPLE_RATE, format="WAV", subtype="PCM_24")
+        return buf.getvalue()
+    sf.write(buf, audio, worker.SAMPLE_RATE, format="WAV", subtype="FLOAT")  # no quantization before ffmpeg
+    rate = sample_rate or {"mp3": 48000, "opus": 48000}.get(fmt)
+    args = {"wav": ["-c:a", "pcm_s24le", "-f", "wav"],
+            "flac": ["-c:a", "flac", "-sample_fmt", "s32", "-bits_per_raw_sample", "24", "-f", "flac"],
+            "mp3": ["-c:a", "libmp3lame", "-b:a", "320k", "-f", "mp3"],
+            "opus": ["-c:a", "libopus", "-b:a", "160k", "-f", "ogg"]}[fmt]
+    resample = ["-af", "aresample=resampler=soxr:precision=28", "-ar", str(rate)] if rate else []
+    return subprocess.run(["ffmpeg", "-v", "error", "-i", "pipe:0", *resample, *args, "pipe:1"],
+                          input=buf.getvalue(), capture_output=True, check=True).stdout
+
+
+class SpeechRequest(BaseModel):
+    text: str | None = Field(None, description="Ukrainian text; '+' after a vowel marks stress")
+    input: str | None = Field(None, description="Alias of text (OpenAI /v1/audio/speech)")
+    engine: str | None = Field(None, description="'styletts2' or 'holos' (default TTS_DEFAULT_ENGINE)")
+    voice: str | None = Field(None, description="Preset name or a favorite alias (male, male2, male3, female, female2); omitted = male")
+    speed: float = Field(1.0, ge=0.5, le=2.0)
+    model: str = Field("multi", description="styletts2 only: 'multi' (31 voices) or 'single' (one male voice)")
+    verbalize: bool = Field(False, description="Spell out numbers/abbreviations first (seq2seq model)")
+    pause_ms: int = Field(0, ge=0, le=3000, description="Silence inserted between sentences")
+    response_format: str = Field("wav", description="wav (24-bit) | flac (24-bit) | mp3 (320k, 48 kHz) | opus")
+    sample_rate: int | None = Field(None, description="Resample output (native 24000; soxr)")
+    english: bool = Field(True, description="Read Latin words (English names, CamelCase, acronyms) the English way")
+    clean: bool = Field(True, description="Strip Markdown and shorten URLs before reading")
+    brackets: str = Field("aside", description="Text in brackets: aside (comma pauses) | skip | announce "
+                                               "('у дужках: …') | voice (read by brackets_voice)")
+    initials: str = Field("letters", description="Initials next to a surname: letters ('те ге Шевченко') | skip; "
+                                                 "full names come from lexicon replace rules")
+    brackets_announce: bool = Field(False, description="Say 'у дужках:' before bracket text (with aside or voice)")
+    brackets_voice: str | None = Field(None, description="brackets=voice: the second voice (same engine); "
+                                                          "default female, or male when the main voice is female")
+    brackets_gain_db: float = Field(-3.0, ge=-20, le=6, description="brackets=voice: volume of the aside")
+    target_duration: float | None = Field(None, gt=0.2, le=600, description="/v1/audio/speech: make the audio last "
+                                          "exactly this many seconds (speed adjusted within fit_min/max_speed)")
+    fit_max_speed: float = Field(1.35, ge=1.0, le=2.0, description="target_duration: fastest allowed (x speed)")
+    fit_min_speed: float = Field(0.85, ge=0.5, le=1.0, description="target_duration: slowest allowed (x speed)")
+    fit_pad: str = Field("end", pattern="^(end|none)$", description="target_duration: shorter speech is padded "
+                                                                     "with silence at the end (end) or left (none)")
+
+
+class LongSpeechRequest(SpeechRequest):
+    """Stream / job defaults: numbers spelled out, short pauses between sentences, mp3."""
+    verbalize: bool = True
+    pause_ms: int = Field(150, ge=0, le=3000)
+    response_format: str = "mp3"
+
+
+class JobRequest(LongSpeechRequest):
+    title: str | None = Field(None, max_length=300)
+
+
+def _validate(req: SpeechRequest, max_chars: int = MAX_CHARS, formats=FORMATS) -> tuple[str, str, str, str | None]:
+    text = (req.text or req.input or "").strip()
+    if not text:
+        raise HTTPException(422, "text is required")
+    if len(text) > max_chars:
+        raise HTTPException(413, f"text longer than {max_chars} characters")
+    engine = (req.engine or worker.DEFAULT_ENGINE).lower()
+    if engine not in worker.ENGINES:
+        raise HTTPException(422, f"engine: one of {list(worker.ENGINES)}")
+    model = "single" if engine == "styletts2" and req.model == "single" else "multi"
+    voice = None
+    if not (engine == "styletts2" and model == "single"):
+        try:
+            voice = worker.resolve_voice(engine, req.voice)
+        except ValueError as exc:
+            raise HTTPException(422, str(exc))
+    if req.response_format not in formats:
+        raise HTTPException(422, f"response_format: one of {sorted(formats)}")
+    if req.initials not in speechtext.INITIALS_MODES:
+        raise HTTPException(422, f"initials: one of {list(speechtext.INITIALS_MODES)}")
+    if req.brackets not in speechtext.BRACKET_MODES:
+        raise HTTPException(422, f"brackets: one of {list(speechtext.BRACKET_MODES)}")
+    return text, engine, model, voice
+
+
+def _aside_voice(req: SpeechRequest, engine: str, voice: str | None) -> str | None:
+    if req.brackets != "voice":
+        return None
+    try:
+        if req.brackets_voice:
+            return worker.resolve_voice(engine, req.brackets_voice)
+        female = worker.resolve_voice(engine, "female")
+        return worker.resolve_voice(engine, "male") if voice == female else female
+    except ValueError as exc:
+        raise HTTPException(422, f"brackets_voice: {exc}")
+
+
+async def _synth(spoken: str, p: dict, request: Request | None = None):
+    """One segment through the worker; text in brackets with brackets=voice is synthesized by the second voice
+    (a bit quieter, short pauses around it) and stitched in."""
+    runs = speechtext.aside_runs(spoken) if speechtext.ASIDE_START in spoken else None
+    if not runs:
+        return await _synth_one(spoken.replace(speechtext.ASIDE_END, ""), p, request)
+    import numpy as np
+
+    gap = np.zeros(int(worker.SAMPLE_RATE * 0.18), dtype=np.float32)
+    parts, info = [], None
+    for text, aside in runs:
+        q = dict(p, voice=p.get("brackets_voice") or p["voice"]) if aside else p
+        try:
+            pcm, info = await _synth_one(text, q, request)
+        except ValueError:  # nothing speakable in this run
+            continue
+        audio = np.frombuffer(pcm, dtype=np.float32)
+        if aside:
+            audio = audio * (10 ** (p.get("brackets_gain_db", -3.0) / 20))
+        if parts:
+            parts.append(gap)
+        parts.append(audio.astype(np.float32))
+    if not parts:
+        raise ValueError("nothing to synthesize")
+    return np.concatenate(parts).tobytes(), info
+
+
+async def _synth_one(spoken: str, p: dict, request: Request | None = None):
+    """Waits instead of failing while the worker queue is full."""
+    while True:
+        try:
+            return await run(worker.synthesize, spoken, p["voice"], p["speed"], p["model"], p["pause_ms"],
+                             p["verbalize"], p["engine"], request=request)
+        except HTTPException as exc:
+            if exc.status_code != 429:
+                raise
+            await asyncio.sleep(2)
+
+
+def _params(req: SpeechRequest, engine: str, model: str, voice: str | None) -> dict:
+    return {"engine": engine, "voice": voice, "model": model, "speed": req.speed, "pause_ms": req.pause_ms,
+            "verbalize": req.verbalize, "english": req.english, "clean": req.clean,
+            "response_format": req.response_format, "brackets": req.brackets,
+            "brackets_announce": req.brackets_announce or req.brackets == "announce", "initials": req.initials,
+            "brackets_voice": _aside_voice(req, engine, voice), "brackets_gain_db": req.brackets_gain_db}
+
+
+async def _plan(text: str, req: SpeechRequest) -> list[dict]:
+    segs, _ = await asyncio.to_thread(speechtext.plan, text, clean_text=req.clean, use_english=req.english,
+                                      pause_ms=req.pause_ms, brackets=req.brackets,
+                                      announce=req.brackets_announce, initials_mode=req.initials)
+    if not segs:
+        raise HTTPException(422, "nothing to read after cleanup")
+    return segs
+
+
+@app.get("/health")
+async def health() -> dict:
+    loading = _warming is not None and not _warming.done()  # models are being loaded by /v1/warmup
+    return {"status": "ok", "loaded": _pool is not None and not loading, "loading": loading, "idle_ttl": IDLE_TTL,
+            "ui": ENABLE_UI, "jobs": JOBS.counts(), "busy": _busy, "queue_max": QUEUE_MAX}
+
+
+# Voice gender, from the median pitch of a test phrase measured for every preset (2026-11-13): Holos female voices are
+# 190-240 Hz, male 95-146 Hz, nothing in between. StyleTTS2 presets are named after their speakers.
+HOLOS_FEMALE = {"Speaker_3", "Speaker_12", "Speaker_17", "Speaker_26", "Speaker_30", "Speaker_37", "Speaker_43",
+                "Speaker_59", "Speaker_67", "Speaker_78", "Гаська Шиян"}
+STYLETTS2_FEMALE = {"Марина Панас", "Гаська Шиян", "Анастасія Павленко", "Вероніка Дорош", "Вікторія Левченко",
+                    "Влада Муравець", "Інна Гелевера", "Катерина Потапенко", "Людмила Чиркова", "Марися Нікітюк",
+                    "Марічка Штирбулова", "Марта Мольфар", "Олена Шверк", "Поліна Еккерт", "Слава Красовська",
+                    "Тетяна Гончарова", "Тетяна Лукинюк"}
+CHILD = {"Поліна Еккерт(хлопчик)"}
+GENDER_WORD = {"male": "Чоловічий", "female": "Жіночий", "child": "Дитячий"}
+
+
+def voice_meta(engine: str, names: list[str]) -> dict:
+    """{voice: {gender, label}}: Holos "Speaker_N" get a consecutive number per gender ("Чоловічий 13"); named voices
+    keep their name. Labels are for display only; requests still use the voice ids and aliases."""
+    female = HOLOS_FEMALE if engine == "holos" else STYLETTS2_FEMALE
+    meta, counters = {}, {}
+
+    def key(n: str):
+        return int(n[8:]) if n.startswith("Speaker_") and n[8:].isdigit() else -1
+
+    for n in sorted(names, key=key):
+        gender = "child" if n in CHILD else "female" if n in female else "male"
+        if n.startswith("Speaker_"):
+            counters[gender] = counters.get(gender, 0) + 1
+            label = f"{GENDER_WORD[gender]} {counters[gender]}"
+        else:
+            label = n.replace("(хлопчик)", " (хлопчик)")
+        meta[n] = {"gender": gender, "label": label}
+    return meta
+
+
+def voices_info() -> dict:
+    engines = {}
+    for engine in worker.ENGINES:
+        names = worker.voice_names(engine)
+        aliases = {k: v for k, v in worker.ALIASES[engine].items() if v in names}
+        favorites = list(dict.fromkeys(aliases.values()))  # in alias order, default first
+        engines[engine] = {"default": aliases.get("male") or (favorites or names)[0], "aliases": aliases,
+                           "favorites": favorites, "voices": favorites + [n for n in names if n not in favorites],
+                           "meta": voice_meta(engine, names)}
+    if "styletts2" in engines:
+        engines["styletts2"]["models"] = {"multi": "the voices above", "single": "one male narrator (voice ignored)"}
+    return {"default_engine": worker.DEFAULT_ENGINE, "default_voice": engines[worker.DEFAULT_ENGINE]["default"],
+            "stress": worker.STRESS, "engines": engines}
+
+
+@app.get("/v1/voices", dependencies=[Depends(auth)])
+@app.get("/voices", dependencies=[Depends(auth)], include_in_schema=False)
+async def voices() -> dict:
+    return voices_info()
+
+
+@app.post("/v1/audio/speech", dependencies=[Depends(auth)])
+@app.post("/synthesize", dependencies=[Depends(auth)], include_in_schema=False)
+async def speech(req: SpeechRequest, request: Request) -> Response:
+    text, engine, model, voice = _validate(req)
+    text, _ = await asyncio.to_thread(speechtext.prepare_text, text, clean_text=req.clean, use_english=req.english,
+                                      brackets=req.brackets, announce=req.brackets_announce,
+                                      initials_mode=req.initials)
+
+    async def speak(speed: float) -> bytes:
+        if speechtext.ASIDE_START in text:
+            pcm, _ = await _synth(text, dict(_params(req, engine, model, voice), speed=speed), request)
+        else:
+            pcm, _ = await run(worker.synthesize, text, voice, speed, model, req.pause_ms, req.verbalize, engine,
+                               request=request)
+        return pcm
+
+    t0 = time.monotonic()
+    fit = None
+    try:
+        pcm = await speak(req.speed)
+        if req.target_duration:
+            pcm, fit = await _fit(pcm, req, speak)
+    except ValueError as exc:
+        raise HTTPException(422, str(exc))
+    elapsed = time.monotonic() - t0
+    dur = len(pcm) / 4 / worker.SAMPLE_RATE
+    data = await asyncio.to_thread(encode, pcm, req.response_format, req.sample_rate)
+    headers = {"X-Audio-Duration": str(round(dur, 2)), "X-Elapsed": str(round(elapsed, 2)),
+               "X-RTF": str(round(elapsed / dur, 3) if dur else 0), "X-Engine": engine,
+               "X-Voice": quote(voice or "single")}
+    if fit:
+        headers.update({"X-Target-Duration": str(req.target_duration), "X-Fit": fit["status"],
+                        "X-Fit-Speed": str(fit["speed"]), "X-Speech-Duration": str(fit["speech_s"])})
+    return Response(data, media_type=FORMATS[req.response_format], headers=headers)
+
+
+async def _fit(pcm: bytes, req: SpeechRequest, speak) -> tuple[bytes, dict]:
+    """Make the speech last req.target_duration seconds: re-synthesize once at the needed speed (natural), then
+    time-stretch the small remainder, within [fit_min_speed, fit_max_speed] x the requested speed; shorter speech
+    is padded with silence (fit_pad=end) or left as is (none). status: ok | overflow (does not fit even at the
+    fastest allowed speed; returned at that speed)."""
+    sr, target = worker.SAMPLE_RATE, req.target_duration
+    lo, hi = req.fit_min_speed, req.fit_max_speed
+    dur = len(pcm) / 4 / sr
+    factor = 1.0  # speed applied relative to req.speed
+    want = dur / target
+    if abs(want - 1) > 0.04:
+        factor = min(hi, max(lo, want))
+        new_speed = min(2.0, max(0.5, req.speed * factor))
+        factor = new_speed / req.speed
+        pcm = await speak(new_speed)
+        dur = len(pcm) / 4 / sr
+    rest = dur / target
+    if abs(rest - 1) > 0.005:  # fine-tune with a time-stretch (only a few percent here, inaudible)
+        a = min(hi / factor, max(lo / factor, rest))
+        if abs(a - 1) > 0.005:
+            pcm = await asyncio.to_thread(speechtext.time_stretch, pcm, a)
+            factor *= a
+            dur = len(pcm) / 4 / sr
+    speech_s = round(dur, 2)
+    status = "overflow" if dur > target + 0.05 else "ok"
+    if dur < target and req.fit_pad == "end":
+        pcm += bytes(4 * int(round((target - dur) * sr)))
+    elif status == "ok" and dur > target:
+        pcm = pcm[:4 * int(target * sr)]  # within 50 ms: trailing silence
+    return pcm, {"status": status, "speed": round(req.speed * factor, 3), "speech_s": speech_s}
+
+
+_warming: asyncio.Task | None = None
+
+
+@app.post("/v1/warmup", dependencies=[Depends(auth)])
+async def warmup(engine: str | None = None) -> dict:
+    """Start loading the models in the background (cold start ~25 s); returns at once."""
+    global _warming
+    engine = engine if engine in worker.ENGINES else worker.DEFAULT_ENGINE
+    if _pool is None and (_warming is None or _warming.done()):
+        _warming = asyncio.create_task(run(worker.warmup, engine))
+    return {"loaded": _pool is not None and (_warming is None or _warming.done()), "engine": engine}
+
+
+@app.post("/v1/audio/speech/stream", dependencies=[Depends(auth)])
+async def speech_stream(req: LongSpeechRequest, request: Request) -> StreamingResponse:
+    """One continuous audio stream; sound starts after the first sentence group. Not stored in history."""
+    text, engine, model, voice = _validate(req, LONG_MAX_CHARS, speechtext.STREAM_FORMATS)
+    segs = await _plan(text, req)
+    p = _params(req, engine, model, voice)
+
+    async def pcm():
+        for s in segs:
+            try:
+                data, _ = await _synth(s["spoken"], p, request)
+            except ValueError:  # nothing speakable in this group
+                continue
+            yield data
+            if s["pause_after_ms"]:
+                yield bytes(4 * int(worker.SAMPLE_RATE * s["pause_after_ms"] / 1000))  # float32 zeros
+
+    return StreamingResponse(speechtext.encode_stream(pcm(), req.response_format),
+                             media_type=speechtext.STREAM_FORMATS[req.response_format],
+                             headers={"X-Segments": str(len(segs)), "Cache-Control": "no-store",
+                                      "X-Accel-Buffering": "no"})
+
+
+# ---- jobs (history) ------------------------------------------------------------------------------------------------
+
+JOBS = jobs.Jobs(synth=_synth, encode=lambda pcm, fmt: encode(pcm, fmt, None))
+_JOB_ID = re.compile(r"^\d{8}-\d{6}-[0-9a-f]{6}$")
+
+
+def _job(jid: str) -> dict:
+    m = JOBS.meta.get(jid) if _JOB_ID.match(jid) else None
+    if m is None:
+        raise HTTPException(404, "job not found")
+    return m
+
+
+@app.post("/v1/jobs", status_code=202, dependencies=[Depends(auth)])
+async def create_job(req: JobRequest) -> dict:
+    text, engine, model, voice = _validate(req, LONG_MAX_CHARS)
+    segs = await _plan(text, req)
+    return await JOBS.create(text, segs, _params(req, engine, model, voice), req.title)
+
+
+@app.get("/v1/jobs", dependencies=[Depends(auth)])
+async def list_jobs(limit: int = Query(50, ge=1, le=500), offset: int = Query(0, ge=0),
+                    q: str = Query("", max_length=200)) -> dict:
+    return JOBS.list(limit, offset, q)
+
+
+@app.get("/v1/jobs/{jid}", dependencies=[Depends(auth)])
+async def get_job(jid: str) -> dict:
+    return JOBS.public(_job(jid), full=True)
+
+
+class JobPatch(BaseModel):
+    title: str = Field(..., min_length=1, max_length=300)
+
+
+@app.patch("/v1/jobs/{jid}", dependencies=[Depends(auth)])
+async def rename_job(jid: str, req: JobPatch) -> dict:
+    _job(jid)
+    return await JOBS.rename(jid, req.title)
+
+
+@app.post("/v1/jobs/{jid}/cancel", dependencies=[Depends(auth)])
+async def cancel_job(jid: str) -> dict:
+    _job(jid)
+    return await JOBS.cancel(jid)
+
+
+@app.delete("/v1/jobs/{jid}", dependencies=[Depends(auth)])
+async def delete_job(jid: str) -> dict:
+    _job(jid)
+    await JOBS.delete(jid)
+    return {"deleted": jid}
+
+
+@app.get("/v1/jobs/{jid}/segments/{index}", dependencies=[Depends(auth)])
+async def job_segment(jid: str, index: int) -> Response:
+    _job(jid)
+    data = await asyncio.to_thread(JOBS.segment_wav, jid, index)
+    if data is None:
+        raise HTTPException(404, "segment not ready or already removed (use the final audio)")
+    return Response(data, media_type="audio/wav", headers={"Cache-Control": "private, max-age=3600"})
+
+
+@app.get("/v1/jobs/{jid}/audio", dependencies=[Depends(auth)])
+async def job_audio(jid: str, download: bool = False) -> FileResponse:
+    m = _job(jid)
+    path = JOBS.audio_path(jid)
+    if not path or not os.path.isfile(path):
+        raise HTTPException(404, "no audio yet")
+    fmt = m["params"]["response_format"]
+    return FileResponse(path, media_type=FORMATS.get(fmt, "application/octet-stream"),
+                        filename=f"ozvuchka-{jid}{os.path.splitext(path)[1]}" if download else None)
+
+
+@app.get("/v1/jobs/{jid}/subtitles", dependencies=[Depends(auth)])
+async def job_subtitles(jid: str, format: str = Query("srt", pattern="^(srt|vtt)$")) -> PlainTextResponse:
+    _job(jid)
+    return PlainTextResponse(JOBS.subtitles(jid, format),
+                             media_type="text/vtt" if format == "vtt" else "application/x-subrip")
+
+
+@app.get("/v1/jobs/{jid}/events", dependencies=[Depends(auth)])
+async def job_events(jid: str, request: Request) -> StreamingResponse:
+    """SSE: replays finished segments, then live `segment` and `job` events until the job ends."""
+    _job(jid)
+
+    def sse(event: str, data: dict) -> str:
+        return f"event: {event}\ndata: {json.dumps(data, ensure_ascii=False)}\n\n"
+
+    async def gen():
+        sent: set[int] = set()
+        last = None
+        while True:
+            version = JOBS.version
+            m = JOBS.meta.get(jid)
+            if m is None:
+                yield sse("job", {"id": jid, "status": "deleted"})
+                return
+            for i, s in enumerate(m["segments"]):
+                if s["done"] and i not in sent:
+                    sent.add(i)
+                    yield sse("segment", {"index": i, "text": s["text"], "start_s": s["start_s"],
+                                          "duration_s": s["duration_s"],
+                                          "audio_url": f"/v1/jobs/{jid}/segments/{i}" if s["duration_s"] else None})
+            pub = JOBS.public(m)
+            if pub != last:
+                last = pub
+                yield sse("job", pub)
+            if m["status"] in jobs.FINAL or await request.is_disconnected():
+                return
+            timed_out = False
+            async with JOBS.changed:
+                try:
+                    await asyncio.wait_for(JOBS.changed.wait_for(lambda: JOBS.version != version), 15)
+                except asyncio.TimeoutError:
+                    timed_out = True
+            if timed_out:
+                yield ": ping\n\n"
+
+    return StreamingResponse(gen(), media_type="text/event-stream",
+                             headers={"Cache-Control": "no-store", "X-Accel-Buffering": "no"})
+
+
+class LexiconRule(BaseModel):
+    rule: str = Field(..., description='e.g. "ваш замок => ваш за+мок" or "~ (?<=\\bваш\\s)замок\\b => за+мок"')
+
+
+def _lexicon_info() -> dict:
+    text = lexicon.read_text()
+    rules = [line.strip() for line in text.splitlines() if line.strip() and not line.strip().startswith("#")]
+    return {"path": lexicon.PATH, "rules": rules, "text": text}
+
+
+def _write_lexicon(text: str) -> dict:
+    try:
+        lexicon.write_text(text)
+    except lexicon.RuleError as exc:
+        raise HTTPException(422, str(exc))
+    return _lexicon_info()
+
+
+@app.get("/v1/lexicon", dependencies=[Depends(auth)])
+async def get_lexicon() -> dict:
+    """The stress lexicon: rules (without comments) and the whole file text."""
+    return _lexicon_info()
+
+
+@app.put("/v1/lexicon", dependencies=[Depends(auth)])
+async def put_lexicon(request: Request) -> dict:
+    """Replace the whole file: text/plain body, or JSON {"text": "..."}. Every rule is validated first."""
+    if request.headers.get("content-type", "").startswith("application/json"):
+        text = str((await request.json()).get("text", ""))
+    else:
+        text = (await request.body()).decode("utf-8")
+    return _write_lexicon(text)
+
+
+@app.post("/v1/lexicon", dependencies=[Depends(auth)])
+async def add_lexicon_rule(req: LexiconRule) -> dict:
+    """Append one rule (validated)."""
+    rule = req.rule.strip()
+    text = lexicon.read_text()
+    if rule in (line.strip() for line in text.splitlines()):
+        return _lexicon_info()
+    return _write_lexicon(text.rstrip("\n") + "\n" + rule + "\n")
+
+
+@app.delete("/v1/lexicon", dependencies=[Depends(auth)])
+async def remove_lexicon_rule(req: LexiconRule) -> dict:
+    """Remove every line equal to the rule; 404 if it is not there."""
+    lines = lexicon.read_text().splitlines()
+    kept = [line for line in lines if line.strip() != req.rule.strip()]
+    if len(kept) == len(lines):
+        raise HTTPException(404, "rule not found (send it exactly as GET /v1/lexicon lists it)")
+    return _write_lexicon("\n".join(kept) + "\n")
+
+
+class TextRequest(BaseModel):
+    text: str
+    verbalize: bool = True
+    english: bool = True
+    clean: bool = True
+    brackets: str = "aside"
+    brackets_announce: bool = False
+    initials: str = "letters"
+
+
+@app.post("/v1/text/verbalize", dependencies=[Depends(auth)])
+async def verbalize(req: TextRequest) -> dict:
+    return {"text": await run(worker.verbalize, req.text[:MAX_CHARS])}
+
+
+@app.post("/v1/text/prepare", dependencies=[Depends(auth)])
+async def prepare(req: TextRequest) -> dict:
+    """Exactly what the voice will read: cleanup, English names, numbers in words, stress marks."""
+    mode = req.brackets if req.brackets in speechtext.BRACKET_MODES else "aside"
+    text, names = await asyncio.to_thread(speechtext.prepare_text, req.text[:MAX_CHARS], clean_text=req.clean,
+                                          use_english=req.english, brackets=mode, announce=req.brackets_announce,
+                                          initials_mode=req.initials if req.initials in speechtext.INITIALS_MODES
+                                          else "letters")
+    out = await run(worker.prepare, text.replace(speechtext.ASIDE_START, "").replace(speechtext.ASIDE_END, ""),
+                    req.verbalize)
+    return {**out, "names": [{"word": w, "uk": u} for w, u in names.items()]}
+
+
+class PhonemizeRequest(BaseModel):
+    text: str = Field(description="text with English names (or just the names)")
+    lang: str = Field("en-us", pattern=r"^en(-[a-z]{2})?$", description="espeak-ng English voice: en-us, en-gb")
+
+
+@app.post("/v1/text/phonemize", dependencies=[Depends(auth)])
+async def phonemize_names(req: PhonemizeRequest) -> dict:
+    """How the Ukrainian voices should say each English name in the text: espeak-ng IPA (with stress) mapped to
+    Cyrillic with "+" after the stressed vowel. Paste "uk" into the text (or a lexicon rule) instead of the Latin word."""
+    words = [w for w in phonemize.latin_words(req.text[:MAX_CHARS]) if not speechtext.is_roman(w)][:200]
+
+    def one(w: str) -> dict:
+        return {"word": w, "ipa": phonemize.ipa(w, req.lang), "uk": speechtext.say_name(w, req.lang)}
+
+    return {"lang": req.lang, "items": await asyncio.to_thread(lambda: [one(w) for w in words])}
+
+
+async def main() -> None:
+    asyncio.create_task(_reaper())
+    JOBS.start()
+    servers = [uvicorn.Server(uvicorn.Config(app, host="0.0.0.0", port=8000, access_log=False))]
+    if ENABLE_UI:
+        import ui
+
+        # the UI talks to this same API in-process under /api (its login session instead of the bearer key)
+        ui_app = ui.build(app, os.environ.get("TTS_UI_PASSWORD") or API_KEY, API_KEY)
+        servers.append(uvicorn.Server(uvicorn.Config(ui_app, host="0.0.0.0", port=8001, access_log=False)))
+    await asyncio.gather(*(s.serve() for s in servers))
+
+
+if __name__ == "__main__":
+    asyncio.run(main())

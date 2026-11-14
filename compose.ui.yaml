@@ -1,0 +1,9 @@
+# Optional web UI «Озвучка» (history, streaming playback, lexicon and voice tools) on its own port:
+#   docker compose -f compose.yaml -f compose.ui.yaml --env-file .env up -d
+# Login: user TTS_UI_USER (default voice), password TTS_UI_PASSWORD (set it in .env). Everything works without this file.
+services:
+  tts:
+    environment:
+      ENABLE_UI: "true"
+      TTS_UI_PASSWORD: ${TTS_UI_PASSWORD:?set TTS_UI_PASSWORD in .env}
+    ports: ["${UI_PORT:-8774}:8001"]

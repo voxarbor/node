@@ -1,0 +1,35 @@
+# Data image with the Opus-MT tc-big models converted to CTranslate2 int8 (what services/translate/convert_opus.sh does),
+# for worker nodes: ghcr.io/voxarbor/node-models-opus:<tag>. Manual only (models change rarely).
+name: models-opus
+on:
+  workflow_dispatch:
+    inputs:
+      tag: { description: "image tag", default: "1" }
+permissions:
+  contents: read
+  packages: write
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: convert
+        run: |
+          mkdir -p ctx/opus-mt
+          docker run --rm -v "$PWD/ctx:/out" python:3.12.12-slim sh -ec '
+            pip install -q --index-url https://download.pytorch.org/whl/cpu torch==2.9.1
+            pip install -q transformers==4.57.1 sentencepiece==0.2.1 sacremoses==0.1.1 ctranslate2==4.9.0
+            for p in en-zle de-zle zle-zle zlw-zle fr-zle es-zle it-zle pt-zle; do
+              ct2-transformers-converter --model Helsinki-NLP/opus-mt-tc-big-$p --output_dir /out/opus-mt/$p \
+                --quantization int8 --copy_files source.spm target.spm
+            done'
+          cp services/models-opus/Dockerfile ctx/ && du -sh ctx/opus-mt/*
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with: { registry: ghcr.io, username: "${{ github.actor }}", password: "${{ secrets.GITHUB_TOKEN }}" }
+      - uses: docker/build-push-action@v6
+        with:
+          context: ctx
+          push: true
+          tags: ghcr.io/voxarbor/node-models-opus:${{ inputs.tag }}
+          labels: org.opencontainers.image.source=https://github.com/voxarbor/node

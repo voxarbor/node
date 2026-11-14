@@ -1,0 +1,65 @@
+# Worker-node gateway: one port, one token. Paths are stripped and passed to the services, which accept the same
+# token (API_KEY = NODE_TOKEN). Request bodies (diarize uploads up to 1 GB) and responses (TTS streams, SSE) are
+# streamed, not buffered.
+{
+	admin off
+	servers {
+		timeouts {
+			idle 10m
+		}
+	}
+}
+
+:8080 {
+	request_body {
+		max_size 1GB
+	}
+	handle /health {
+		header Content-Type application/json
+		respond `{"status":"ok"}` 200
+	}
+	@noauth not header Authorization "Bearer {$NODE_TOKEN}"
+	handle @noauth {
+		header Content-Type application/json
+		respond `{"detail":"invalid token"}` 401
+	}
+	handle /capabilities {
+		reverse_proxy node-info:8000
+	}
+	handle_path /stt/* {
+		reverse_proxy stt:8000 {
+			flush_interval -1
+			transport http {
+				response_header_timeout 60m
+			}
+		}
+	}
+	handle_path /tts/* {
+		reverse_proxy tts:8000 {
+			flush_interval -1
+			transport http {
+				response_header_timeout 30m
+			}
+		}
+	}
+	handle_path /translate/* {
+		reverse_proxy translate:8000 {
+			flush_interval -1
+			transport http {
+				response_header_timeout 30m
+			}
+		}
+	}
+	handle_path /diarize/* {
+		reverse_proxy diarize:8000 {
+			flush_interval -1
+			transport http {
+				response_header_timeout 60m
+			}
+		}
+	}
+	handle {
+		header Content-Type application/json
+		respond `{"detail":"not found"}` 404
+	}
+}

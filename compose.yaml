@@ -1,0 +1,142 @@
+# voice-core: the voice services behind one gateway port. See docs/gateway.md; optional web UI: compose.ui.yaml.
+#   cp .env.example .env && edit NODE_TOKEN && docker compose --env-file .env up -d
+name: voice-core-worker
+
+x-common: &common
+  restart: unless-stopped
+  environment: &env
+    API_KEY: ${NODE_TOKEN:?set NODE_TOKEN in .env}
+  logging:
+    driver: json-file
+    options: { max-size: "10m", max-file: "3" }
+
+services:
+  gateway:
+    <<: *common
+    image: caddy:2.11.7
+    ports: ["${GATEWAY_PORT:-8790}:8080"]
+    environment:
+      NODE_TOKEN: ${NODE_TOKEN:?set NODE_TOKEN in .env}
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+    depends_on: [node-info]
+    deploy:
+      resources:
+        limits: { cpus: "1", memory: 256m }
+
+  node-info:
+    <<: *common
+    image: ${REGISTRY:-ghcr.io/voxarbor}/voice-core-node-info:${VOICE_CORE_TAG:-latest}
+    environment:
+      <<: *env
+      VOICE_CORE_VERSION: ${VOICE_CORE_TAG:-latest}
+      STT_MODEL: ${STT_MODEL:-deepdml/faster-whisper-large-v3-turbo-ct2}
+      STT_IMAGE: ghcr.io/speaches-ai/speaches:0.8.3-cpu
+      TTS_IMAGE: ${REGISTRY:-ghcr.io/voxarbor}/voice-core-tts:${VOICE_CORE_TAG:-latest}
+      TRANSLATE_IMAGE: ${REGISTRY:-ghcr.io/voxarbor}/voice-core-translate:${VOICE_CORE_TAG:-latest}
+      DIARIZE_IMAGE: ${REGISTRY:-ghcr.io/voxarbor}/voice-core-diarize:${VOICE_CORE_TAG:-latest}
+    deploy:
+      resources:
+        limits: { cpus: "0.5", memory: 128m }
+
+  stt:
+    <<: *common
+    image: ghcr.io/speaches-ai/speaches:0.8.3-cpu   # upstream public image, pinned
+    environment:
+      <<: *env
+      WHISPER__INFERENCE_DEVICE: cpu
+      WHISPER__COMPUTE_TYPE: int8
+      WHISPER__CPU_THREADS: ${STT_THREADS:-4}
+      WHISPER__TTL: "600"
+      ENABLE_UI: "false"
+      MALLOC_ARENA_MAX: "2"
+      MALLOC_MMAP_THRESHOLD_: "131072"
+      MALLOC_TRIM_THRESHOLD_: "131072"
+    cpu_shares: 256   # batch: live TTS wins under contention
+    volumes:
+      - hf-cache:/home/ubuntu/.cache/huggingface/hub
+    deploy:
+      resources:
+        limits: { cpus: "${STT_CPUS:-4}", memory: 4g }
+
+  tts:
+    <<: *common
+    image: ${REGISTRY:-ghcr.io/voxarbor}/voice-core-tts:${VOICE_CORE_TAG:-latest}
+    environment:
+      <<: *env
+      ENABLE_UI: "false"   # compose.ui.yaml turns the web UI on
+      IDLE_TTL: "600"
+      TORCH_THREADS: ${TTS_THREADS:-2}
+      TTS_DEFAULT_ENGINE: holos
+      TTS_ENGINES: ${TTS_ENGINES:-holos}   # add ,styletts2 to enable StyleTTS2 (see NOTICE)
+      HOLOS_BACKEND: pytorch
+      TTS_STRESS: accentuk
+      ACCENTUK_MODE: light          # the image carries the light assets; "full" needs the 2.6 GB volume (README)
+      TTS_LEXICON: /config/tts-lexicon.txt
+      TTS_VERBALIZER: accentuk
+      TTS_JOBS_DIR: /jobs
+      MALLOC_ARENA_MAX: "2"
+    volumes:
+      - tts-cache:/cache
+      - tts-config:/config
+      - tts-jobs:/jobs
+    deploy:
+      resources:
+        limits: { cpus: "${TTS_CPUS:-4}", memory: 8g }
+
+  translate:
+    <<: *common
+    image: ${REGISTRY:-ghcr.io/voxarbor}/voice-core-translate:${VOICE_CORE_TAG:-latest}
+    environment:
+      <<: *env
+      TRANSLATE_MODEL: nllb-600m
+      TRANSLATE_MAX_MODELS: "3"
+      TRANSLATE_THREADS: ${TRANSLATE_THREADS:-2}
+      TRANSLATE_NLLB: ${TRANSLATE_NLLB:-0}   # 1 = NLLB-200 fallback for other languages (CC-BY-NC, see NOTICE)
+      IDLE_TTL: "600"
+      MALLOC_ARENA_MAX: "2"
+    volumes:
+      - translate-cache:/cache
+    depends_on:
+      init-opus: { condition: service_completed_successfully }
+    deploy:
+      resources:
+        limits: { cpus: "${TRANSLATE_CPUS:-4}", memory: 4g }
+
+  diarize:
+    <<: *common
+    image: ${REGISTRY:-ghcr.io/voxarbor}/voice-core-diarize:${VOICE_CORE_TAG:-latest}
+    environment:
+      <<: *env
+      IDLE_TTL: "600"
+      DIARIZE_THREADS: ${DIARIZE_THREADS:-2}
+      MALLOC_ARENA_MAX: "2"
+    cpu_shares: 256   # batch: live TTS wins under contention
+    tmpfs:
+      - /tmp/diarize:uid=65534,gid=65534,size=3g
+    deploy:
+      resources:
+        limits: { cpus: "${DIARIZE_CPUS:-4}", memory: 3g }
+
+  # one-shot model setup (idempotent): Opus-MT models into the translate cache, Whisper model into STT
+  init-opus:
+    image: ${REGISTRY:-ghcr.io/voxarbor}/voice-core-models-opus:${OPUS_MODELS_TAG:-1}
+    volumes:
+      - translate-cache:/cache
+    restart: "no"
+
+  init-stt:
+    image: ${REGISTRY:-ghcr.io/voxarbor}/voice-core-node-info:${VOICE_CORE_TAG:-latest}
+    command: ["python", "init_models.py"]
+    environment:
+      <<: *env
+      STT_MODEL: ${STT_MODEL:-deepdml/faster-whisper-large-v3-turbo-ct2}
+    depends_on: [stt]
+    restart: "no"
+
+volumes:
+  hf-cache:
+  tts-cache:
+  tts-config:
+  tts-jobs:
+  translate-cache:
