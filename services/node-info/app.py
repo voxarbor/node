@@ -14,7 +14,9 @@ import urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 TOKEN = os.environ["API_KEY"]
-VERSION = os.environ.get("VOICE_CORE_VERSION", "dev")
+TAG = os.environ.get("VOICE_CORE_VERSION", "")  # the tag the node pins (VOICE_CORE_TAG): v0.7.4, latest, ...
+RELEASE = os.environ.get("VOICE_CORE_RELEASE", "dev")  # baked into the image by CI
+VERSION = TAG if TAG.startswith("v") and TAG[1:2].isdigit() else RELEASE
 SERVICES = {  # name -> base URL inside the node's compose network
     "stt": os.environ.get("STT_URL", "http://stt:8000"),
     "tts": os.environ.get("TTS_URL", "http://tts:8000"),
@@ -114,7 +116,8 @@ def capabilities() -> dict:
         except Exception as exc:
             s.update(available=False, healthy=False, error=type(exc).__name__)
         services[name] = s
-    return {"schema": 1, "voice_core_version": VERSION, "local_ai_version": VERSION, "generated_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+    return {"schema": 1, "voice_core_version": VERSION, "local_ai_version": VERSION,
+            "voice_core_tag": TAG or None, "voice_core_release": RELEASE, "generated_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
             "node": host(), "services": services,
             "gateway_paths": {k: f"/{k}/" for k in SERVICES}}
 

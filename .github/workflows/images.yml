@@ -55,6 +55,9 @@ jobs:
             ghcr.io/voxarbor/node-${{ matrix.service }}:sha-${{ steps.v.outputs.sha }}
             ghcr.io/voxarbor/node-${{ matrix.service }}:latest
             ghcr.io/voxarbor/node-${{ matrix.service }}:${{ steps.v.outputs.release }}
-          labels: org.opencontainers.image.source=https://github.com/voxarbor/node
+          build-args: VOICE_CORE_RELEASE=${{ steps.v.outputs.release }}
+          labels: |
+            org.opencontainers.image.source=https://github.com/voxarbor/node
+            org.opencontainers.image.version=${{ steps.v.outputs.release }}
           cache-from: type=gha,scope=${{ matrix.service }}
           cache-to: type=gha,scope=${{ matrix.service }},mode=max
