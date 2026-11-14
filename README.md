@@ -25,7 +25,8 @@ The first start pulls the images (~11 GB) and downloads ~3 GB of models. Then ev
 `Authorization: Bearer <NODE_TOKEN>` to `http://<host>:8790` (`GATEWAY_PORT`). Optional web UI «Озвучка» (history,
 streaming playback, voice and lexicon tools): `docker compose -f compose.yaml -f compose.ui.yaml --env-file .env up -d`.
 
-NVIDIA GPU: add `-f compose.gpu.yaml` (STT and TTS on the GPU, docs/gateway.md "GPU nodes").
+NVIDIA GPU: `COMPOSE_FILE=compose.yaml:compose.gpu.yaml` in `.env` (STT and TTS on the GPU; every plain `docker compose`
+command and update keeps it; docs/gateway.md "GPU nodes").
 
 Size threads and CPU limits to the machine in `.env`. Models load on demand and unload after 10 minutes idle.
 
