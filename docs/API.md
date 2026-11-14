@@ -42,7 +42,7 @@ Errors: `{"detail": "..."}` with 4xx/5xx; `429` = the model worker is busy (retr
 - `POST /v1/text/phonemize` `{text, lang="en-us"}` -> `{lang, items: [{word, ipa, uk}]}`
 - Lexicon: `GET /v1/lexicon` -> `{path, rules, text}`; `PUT` (whole file, text/plain or `{"text"}`), `POST`/`DELETE` `{"rule"}`.
   Rule forms: `наприкінці => наприкі+нці` (word), `замок на дверях => замо+к на дверях` (phrase),
-  `~ regex => replacement` (regex), `GitHub => ґі+тхаб` (name: Latin left side, any Cyrillic right side with `+`),
+  `~ regex => replacement` (regex), `GitHub => гі+тхаб` (name: Latin left side, any Cyrillic right side with `+`),
   `Т. Г. Шевченко => Тарас Григорович Шевченко` / `т. зв. => так званий` (replace: any other text, `+` optional;
   "Т.Г." matches "Т. Г." too).
 

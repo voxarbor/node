@@ -41,10 +41,10 @@ assert not any("a" <= ch.lower() <= "z" for ch in out), out
 print("english ok:", out)
 
 # lexicon name rules win over espeak
-lexicon.write_text("GitHub => ґі+тхаб\nVisual Studio Code => ві+жуал сту+діо ко+уд\nнаприкінці => наприкі+нці\n")
+lexicon.write_text("GitHub => гі+тхаб\nVisual Studio Code => ві+жуал сту+діо ко+уд\nнаприкінці => наприкі+нці\n")
 out, names = speech.english("У Visual Studio Code відкрий GitHub.")
-assert "ві+жуал сту+діо ко+уд" in out and "ґі+тхаб" in out, out
-assert speech.say_name("github") == "ґі+тхаб"
+assert "ві+жуал сту+діо ко+уд" in out and "гі+тхаб" in out, out
+assert speech.say_name("github") == "гі+тхаб"
 try:
     lexicon.parse_rule("GitHub => GitHu+b")
     raise AssertionError("latin right side accepted")
@@ -135,3 +135,11 @@ assert segs[0]["text"].startswith("Поет Т.Г. Шевченко"), segs[0]  
 print("initials ok:", sp)
 
 print("ALL OK")
+
+# English names: Ukrainian conventions on top of espeak's American IPA (2026-11-14, picked by ear)
+import phonemize
+for w, want in {"Minecraft": "ма+йнкрафт", "Telegram": "те+леграм", "Instagram": "і+нстаграм", "Bank": "ба+нк",
+                "Google": "гу+гл", "Python": "па+йтон", "Microsoft": "ма+йкрософт", "Docker": "до+кер",
+                "Link": "лі+нк", "Batman": "бе+тмен", "MC": "ем-сі"}.items():
+    assert phonemize.name(w) == want, (w, phonemize.name(w))
+print("english names ok")

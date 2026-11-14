@@ -5,7 +5,7 @@ One rule per line, "#" starts a comment:
     ваш замок => ваш за+мок                 phrase: whole-word phrase, any case/whitespace; "+" go where marked
     ~ \\bзамок(?=\\s+на\\s+двер) => замо+к    regex (Python, case-insensitive): the match is replaced by the
                                             right side; keep the match to the word itself with lookarounds
-    GitHub => ґі+тхаб                       name: a Latin word/phrase -> how to say it (used by the English-names
+    GitHub => гі+тхаб                       name: a Latin word/phrase -> how to say it (used by the English-names
                                             step before automatic phonetics; whole words, any case)
     Т. Г. Шевченко => Тарас Григорович Шевченко   replace: any other text -> what to say (full names for
                                             initials, abbreviations: т. зв. => так зва+ний); "+" optional

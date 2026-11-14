@@ -18,7 +18,7 @@ SOUNDS = [
     ("ɪɹ", "ір"), ("ɛɹ", "ер"), ("ʊɹ", "ур"), ("ɑɹ", "ар"), ("ɔɹ", "ор"), ("ɜɹ", "ер"), ("ɚ", "ер"), ("ɝ", "ер"),
     ("iəɹ", "ір"), ("iə", "іа"), ("i", "і"), ("ɪ", "і"), ("ᵻ", "і"), ("e", "е"), ("ɛ", "е"), ("æ", "е"), ("ɑ", "а"), ("ɒ", "о"),
     ("ɔ", "о"), ("o", "о"), ("ʊ", "у"), ("u", "у"), ("ʌ", "а"), ("ə", "е"), ("ɐ", "а"), ("a", "а"),
-    ("p", "п"), ("b", "б"), ("t", "т"), ("ɾ", "т"), ("d", "д"), ("k", "к"), ("ɡ", "ґ"), ("g", "ґ"), ("f", "ф"),
+    ("p", "п"), ("b", "б"), ("t", "т"), ("ɾ", "т"), ("d", "д"), ("k", "к"), ("ɡ", "г"), ("g", "г"), ("f", "ф"),
     ("v", "в"), ("θ", "т"), ("ð", "д"), ("s", "с"), ("z", "з"), ("ʃ", "ш"), ("ʒ", "ж"), ("h", "х"), ("m", "м"),
     ("n", "н"), ("ŋ", "нг"), ("l", "л"), ("ɫ", "л"), ("ɹ", "р"), ("r", "р"), ("w", "в"), ("ʔ", ""),
 ]
@@ -64,8 +64,48 @@ def to_ukr(phon: str) -> str:
     return out
 
 
+_V = re.compile(r"aɪ|aʊ|ɔɪ|eɪ|oʊ|əʊ|[iɪᵻeɛæɑɒɔoʊuʌəɐaɚɝɜ]")
+
+
+def adapt(us: str, gb: str | None) -> str:
+    """American IPA, adjusted to how English names are usually said in Ukrainian:
+    - ŋ before k/g is n (Bank -> бенк, Link -> лінк, not "бенгк");
+    - æ before f, s, θ, ns, nt is the long "a" of British English (craft -> крафт, last, master, dance), and before
+      nk/ng too (Bank -> банк, Tank -> танк);
+      -gram is "грам" (Telegram, Instagram); g is г (Google -> гугл), as these names are usually written;
+    - American ɑ where British has ɒ (the letter o) is о (Docker -> докер, Microsoft, Spotify)."""
+    if gb:
+        vu, vg = _V.findall(us), _V.findall(gb)
+        if len(vu) == len(vg):
+            n = iter(range(len(vg)))
+            us = _V.sub(lambda m: "ɒ" if vg[next(n)] == "ɒ" and m.group(0) == "ɑ" else m.group(0), us)
+    us = re.sub(r"ŋ(?=ˌ?ˈ?[kɡg])", "n", us)
+    us = re.sub(r"æ(?=ː?(?:f|s|θ|n[stkɡg]|ŋ))", "ɑ", us)
+    us = re.sub(r"(ɡɹˌ?)æ(m)$", r"\1ɑ\2", us)
+    return us
+
+
+_REDUCED = set("əᵻɐ")
+_ORTH = {"a": "a", "e": "e", "i": "i", "o": "o", "u": "u", "y": "i"}
+
+
+def spelled_vowels(phon: str, word: str) -> str:
+    """Unstressed reduced vowels (ə, ᵻ) say nothing about the letter, so they follow the spelling when the vowels line
+    up one to one: Telegram -> телеграм (not теліграм), Python -> пайтон, Microsoft -> майкрософт."""
+    groups = re.findall(r"[aeiouy]+", word.lower())
+    if len(groups) != len(_V.findall(phon)):
+        return phon
+    n = iter(groups)
+    return _V.sub(lambda m: (lambda g: _ORTH[g[0]] if m.group(0) in _REDUCED else m.group(0))(next(n)), phon)
+
+
 def ukr(word: str, lang: str = "en-us") -> str | None:
     phon = ipa(word, lang)
+    if phon and lang == "en-us":
+        phon = adapt(phon, ipa(word, "en-gb"))
+        if re.search(r"[^aeiouy]le$", word.lower()):  # syllabic -le: Google -> гугл, Apple -> епл
+            phon = re.sub(r"əl$", "l", phon)
+        phon = spelled_vowels(phon, word)
     return to_ukr(phon) if phon else None
 
 
