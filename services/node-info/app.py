@@ -71,7 +71,8 @@ def static_info() -> dict:
         info["translate"] = {"languages": sorted(get(f"{SERVICES['translate']}/v1/languages")["languages"])}
     except Exception as exc:
         info["translate"] = {"error": type(exc).__name__}
-    _cache.update(at=time.time(), static=info)
+    if not any("error" in v for v in info.values()):  # retry next time while a service is still starting
+        _cache.update(at=time.time(), static=info)
     return info
 
 
