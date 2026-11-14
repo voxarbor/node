@@ -33,7 +33,7 @@ Errors: `{"detail": "..."}` with 4xx/5xx; `429` = the model worker is busy (retr
 - `POST /v1/warmup?engine=holos` -> `{loaded, engine}` at once; starts loading the models in the background when they
   are unloaded (cold start ~25 s; warm, the first sound of a stream/job comes ~1.5 s after the request). Call it when
   a page opens so the first synthesis does not wait.
-- `GET /v1/voices` -> `{default_engine, default_voice, stress, engines: {holos|styletts2: {default, aliases, favorites, voices, meta: {voice: {gender: male|female|child, label}}, models?}}}`; `label` is for display ("Чоловічий 13" for Speaker_53, consecutive per gender; named voices keep their names), requests still use voice ids/aliases
+- `GET /v1/voices` -> `{default_engine, default_voice, stress, engines: {holos|styletts2: {default, aliases, favorites, voices, meta: {voice: {gender: male|female|child, label}}, models?}}}`; `label` is for display ("Ярослав — оповідач" for Speaker_53; Holos presets also carry `name` and `description`; an unknown Speaker_N gets "Чоловічий N"; named voices keep their names), requests still use voice ids/aliases
 - `POST /v1/audio/speech` -> whole audio file (≤ 5000 chars). Headers `X-Audio-Duration`, `X-Elapsed`, `X-RTF`, `X-Engine`, `X-Voice` (URL-encoded).
 - `POST /v1/audio/speech/stream` -> one continuous audio stream (chunked), audio starts after the first sentence
   (~1.5 s warm, ~25 s when the models were unloaded: call `/v1/warmup` early). ≤ 300 000 chars. Header `X-Segments`. Not stored in history.

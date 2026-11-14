@@ -166,8 +166,8 @@ first). Real example from a test node (lists shortened with "..."; `local_ai_ver
           },
           "labels": {
             "Гаська Шиян": "Гаська Шиян",
-            "Speaker_0": "Чоловічий 1",
-            "Speaker_1": "Чоловічий 2",
+            "Speaker_0": "Іван — рівний",
+            "Speaker_1": "Андрій — основний",
             "...": "..."
           }
         }

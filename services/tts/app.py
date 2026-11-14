@@ -257,11 +257,25 @@ STYLETTS2_FEMALE = {"Марина Панас", "Гаська Шиян", "Ана�
                     "Тетяна Гончарова", "Тетяна Лукинюк"}
 CHILD = {"Поліна Еккерт(хлопчик)"}
 GENDER_WORD = {"male": "Чоловічий", "female": "Жіночий", "child": "Дитячий"}
+# Display names of the Holos presets (owner's pick 2026-11-14): a name plus what the voice sounds like (pitch,
+# liveliness and tempo measured on one phrase). Ids stay Speaker_N; requests and aliases are unchanged.
+HOLOS_NAMES = {
+    "Speaker_11": ("Богдан", "бас"), "Speaker_36": ("Тарас", "низький спокійний"), "Speaker_24": ("Остап", "жвавий"),
+    "Speaker_53": ("Ярослав", "оповідач"), "Speaker_84": ("Назар", "диктор"), "Speaker_1": ("Андрій", "основний"),
+    "Speaker_0": ("Іван", "рівний"), "Speaker_34": ("Максим", "бадьорий"), "Speaker_56": ("Данило", "виразний"),
+    "Speaker_42": ("Роман", "спокійний"), "Speaker_16": ("Олесь", "ведучий"), "Speaker_69": ("Мирослав", "неспішний"),
+    "Speaker_21": ("Захар", "тенор"), "Speaker_18": ("Ілля", "високий"), "Speaker_29": ("Орест", "молодий"),
+    "Speaker_35": ("Юрко", "юнак"),
+    "Speaker_30": ("Оксана", "основна"), "Speaker_78": ("Соломія", "неспішна"), "Speaker_43": ("Леся", "спокійна"),
+    "Speaker_37": ("Христина", "виразна"), "Speaker_67": ("Ярина", "рівна"), "Speaker_17": ("Дарина", "ведуча"),
+    "Speaker_12": ("Марічка", "жвава"), "Speaker_26": ("Зоряна", "казкарка"), "Speaker_3": ("Олеся", "дикторка"),
+    "Speaker_59": ("Уляна", "висока"),
+}
 
 
 def voice_meta(engine: str, names: list[str]) -> dict:
-    """{voice: {gender, label}}: Holos "Speaker_N" get a consecutive number per gender ("Чоловічий 13"); named voices
-    keep their name. Labels are for display only; requests still use the voice ids and aliases."""
+    """{voice: {gender, label[, name, description]}}: Holos presets get a name and a description ("Ярослав — оповідач",
+    HOLOS_NAMES; an unknown Speaker_N falls back to a number per gender, "Чоловічий 3"); named voices keep their name. Labels are for display only; requests still use the voice ids and aliases."""
     female = HOLOS_FEMALE if engine == "holos" else STYLETTS2_FEMALE
     meta, counters = {}, {}
 
@@ -270,12 +284,16 @@ def voice_meta(engine: str, names: list[str]) -> dict:
 
     for n in sorted(names, key=key):
         gender = "child" if n in CHILD else "female" if n in female else "male"
-        if n.startswith("Speaker_"):
+        extra = {}
+        if engine == "holos" and n in HOLOS_NAMES:
+            name, about = HOLOS_NAMES[n]
+            label, extra = f"{name} — {about}", {"name": name, "description": about}
+        elif n.startswith("Speaker_"):
             counters[gender] = counters.get(gender, 0) + 1
             label = f"{GENDER_WORD[gender]} {counters[gender]}"
         else:
             label = n.replace("(хлопчик)", " (хлопчик)")
-        meta[n] = {"gender": gender, "label": label}
+        meta[n] = {"gender": gender, "label": label, **extra}
     return meta
 
 
