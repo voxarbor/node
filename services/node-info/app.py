@@ -24,6 +24,7 @@ SERVICES = {  # name -> base URL inside the node's compose network
 }
 IMAGES = {k: os.environ.get(f"{k.upper()}_IMAGE", "") for k in SERVICES}
 STT_MODEL = os.environ.get("STT_MODEL", "deepdml/faster-whisper-large-v3-turbo-ct2")
+STATIC_TTL = float(os.environ.get("STATIC_TTL", "60"))
 _cache: dict = {"at": 0.0, "static": None}
 
 
@@ -56,8 +57,9 @@ def host() -> dict:
 
 
 def static_info() -> dict:
-    """Things that change only with a redeploy (voices, language lists): cached for 10 minutes."""
-    if _cache["static"] and time.time() - _cache["at"] < 600:
+    """Voices and language lists: cached briefly (a service restarted with other engines/voices shows up within
+    STATIC_TTL seconds; was 10 min, which kept engines that had just been switched off)."""
+    if _cache["static"] and time.time() - _cache["at"] < STATIC_TTL:
         return _cache["static"]
     info: dict = {}
     try:
