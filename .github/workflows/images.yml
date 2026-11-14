@@ -6,7 +6,7 @@ name: images
 on:
   push:
     branches: [main]
-    paths: ["services/tts/**", "services/translate/**", "services/diarize/**", "services/node-info/**", "VERSION", ".github/workflows/images.yml"]
+    paths: ["services/tts/**", "services/translate/**", "services/diarize/**", "services/node-info/**", "services/fetch/**", "VERSION", ".github/workflows/images.yml"]
   workflow_dispatch:
 permissions:
   contents: read
@@ -18,7 +18,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        service: [tts, translate, diarize, node-info]
+        service: [tts, translate, diarize, node-info, fetch]
     steps:
       - uses: actions/checkout@v4
         with: { fetch-depth: 2 }

@@ -58,6 +58,15 @@
 			}
 		}
 	}
+	handle_path /fetch/* {
+		# optional service (compose profile "fetch"); 502 when it is not running
+		reverse_proxy fetch:8000 {
+			flush_interval -1
+			transport http {
+				response_header_timeout 10m
+			}
+		}
+	}
 	handle {
 		header Content-Type application/json
 		respond `{"detail":"not found"}` 404

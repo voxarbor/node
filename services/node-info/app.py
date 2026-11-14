@@ -20,6 +20,7 @@ SERVICES = {  # name -> base URL inside the node's compose network
     "tts": os.environ.get("TTS_URL", "http://tts:8000"),
     "translate": os.environ.get("TRANSLATE_URL", "http://translate:8000"),
     "diarize": os.environ.get("DIARIZE_URL", "http://diarize:8000"),
+    "fetch": os.environ.get("FETCH_URL", "http://fetch:8000"),  # optional (compose profile fetch)
 }
 IMAGES = {k: os.environ.get(f"{k.upper()}_IMAGE", "") for k in SERVICES}
 STT_MODEL = os.environ.get("STT_MODEL", "deepdml/faster-whisper-large-v3-turbo-ct2")
@@ -101,6 +102,10 @@ def capabilities() -> dict:
                 s["endpoints"] = ["/v1/translate", "/v1/punctuate", "/v1/languages"]
             elif name == "stt":
                 s.update(model=STT_MODEL, endpoints=["/v1/audio/transcriptions"])
+            elif name == "fetch":
+                s.update(ytdlp_version=h.get("ytdlp_version"), deno_version=h.get("deno_version"),
+                         last_bot_check=h.get("last_bot_check"), last_ok=h.get("last_ok"),
+                         endpoints=["/v1/info", "/v1/subs", "/v1/audio"])
             elif name == "diarize":
                 s.update(model="pyannote segmentation-3.0 + wespeaker_en_voxceleb_resnet34_LM (sherpa-onnx)",
                          sessions=h.get("sessions"), endpoints=["/v1/diarize"])

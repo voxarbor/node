@@ -33,3 +33,6 @@ Speaker diarization
 
 Web UI / gateway
 - Caddy - Apache-2.0
+
+fetch (optional service): yt-dlp (Unlicense, https://github.com/yt-dlp/yt-dlp), yt-dlp-ejs (Unlicense), Deno (MIT).
+Users are responsible for complying with the terms of the sites they fetch from.

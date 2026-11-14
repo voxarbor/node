@@ -10,6 +10,7 @@ of a coordinator. No GPU, no cloud, no API keys of third parties.
 | `/stt/v1/audio/transcriptions` | Whisper large-v3-turbo (OpenAI-compatible) |
 | `/translate/v1/translate`, `/translate/v1/punctuate` | Opus-MT → Ukrainian (NLLB-200 opt-in), punctuation + capitals + sentences for raw captions |
 | `/diarize/v1/diarize` | who speaks when, each speaker's gender |
+| `/fetch/v1/info`, `/fetch/v1/subs`, `/fetch/v1/audio` | optional (`COMPOSE_PROFILES=fetch`): YouTube metadata, subtitles and audio fetched from this node's IP |
 | `/capabilities` | what this node runs (schema 1) |
 
 ## Run

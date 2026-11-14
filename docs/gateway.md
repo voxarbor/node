@@ -13,6 +13,7 @@ rebuilt; "Run workflow" rebuilds all). Tags: the service version (`services/<nam
 | `ghcr.io/voxarbor/node-tts` | TTS API (UI off on nodes); HolosTTS + StyleTTS2 + accentuk **light** weights are inside (~7 GB) |
 | `ghcr.io/voxarbor/node-translate` | translate + punctuation; models download on first use into a volume |
 | `ghcr.io/voxarbor/node-diarize` | diarization; its two small ONNX models (~35 MB) are inside |
+| `ghcr.io/voxarbor/node-fetch` | optional YouTube fetch: yt-dlp + deno (JS challenges), no models (~400 MB) |
 | `ghcr.io/voxarbor/node-node-info` | `/capabilities` + the one-shot Whisper download |
 | `ghcr.io/voxarbor/node-models-opus:1` | data-only: Opus-MT models (CT2 int8) copied once into the translate volume (manual workflow `models-opus.yml`) |
 | `ghcr.io/speaches-ai/speaches:0.8.3-cpu` | STT, upstream public image; the Whisper model downloads once (`init-stt`) |
@@ -37,10 +38,29 @@ Paths are stripped and passed on to the services (TTS contract: `docs/API.md`):
 | `/tts/v1/audio/speech`, `/tts/v1/audio/speech/stream`, `/tts/v1/jobs…`, `/tts/v1/voices`, `/tts/v1/warmup` … | TTS |
 | `/translate/v1/translate`, `/translate/v1/punctuate`, `/translate/v1/languages` | translate + punctuation |
 | `/diarize/v1/diarize` | diarization (multipart up to 1 GB, sessions/windows) |
+| `/fetch/v1/info`, `/fetch/v1/subs`, `/fetch/v1/audio` | optional YouTube fetch (below); 502 when not enabled |
 | `/capabilities` | this node's description (below) |
 
 Request bodies and responses are streamed (no buffering: TTS streams, SSE, diarize uploads); upstream response
 timeouts are 30–60 min. 
+
+## Fetch (optional, since 0.7.0)
+
+For a coordinator whose own IP YouTube blocks: the node fetches with its IP. Off by default; enable with
+`COMPOSE_PROFILES=fetch` in `.env`. Only `youtube.com` / `youtu.be` URLs (400 otherwise), no playlists.
+Optional cookies: a Netscape `cookies.txt` in the `fetch-config` volume (`/config/cookies.txt`); optional
+`YTDLP_PROXY`. yt-dlp goes stale quickly: the coordinator can read `services.fetch.ytdlp_version`.
+
+| request | answer |
+|---|---|
+| `POST /fetch/v1/info {"url"}` | yt-dlp info dict (`extract_info`, no download) without `formats` and signed URLs; `subtitles` / `automatic_captions` as `{lang: [{ext, name}]}` |
+| `POST /fetch/v1/subs {"url", "lang", "kind": "manual"\|"auto"}` | the json3 track as YouTube returns it (404 `no_track`) |
+| `POST /fetch/v1/audio {"url"}` | best audio stream as is (no re-encode), header `X-Audio-Ext` (webm, m4a …) |
+
+Errors are JSON `{"error", "detail"}`: 400 bad URL, 422 `unavailable` (private, removed, age/region-locked,
+upcoming), 429 `bot_check` (YouTube asks to sign in: use another node and let this one rest; also
+`services.fetch.last_bot_check`) or `busy` (more than `FETCH_QUEUE_MAX` at once), 504 `timeout`, 502 `fetch_failed`.
+Timing: info/subs take 5–40 s (JS challenge solving), so give them a 120 s client timeout.
 
 ## GET /capabilities (schema 1)
 
@@ -48,6 +68,8 @@ Fields are only added within a schema version. `services.<name>.available` = rea
 `busy` = jobs submitted and not finished, `queue_max` = above it the service answers 429, `loaded` = models in RAM.
 `tts.lexicon_sha256` (sha256 of the lexicon file text, as `GET /tts/v1/lexicon` returns it) and `lexicon_rules`
 let a coordinator check that a node's stress lexicon matches its source; push a new one with `PUT /tts/v1/lexicon`.
+`fetch` (when enabled) adds `ytdlp_version`, `deno_version`, `last_bot_check`, `last_ok`; when it is off it shows
+`available: false`.
 TTS gives every voice's `genders` (male | female | child) and display `labels`; `voices` order = priority (favorites
 first). Real example from a test node (lists shortened with "..."; `local_ai_version` is a deprecated alias of
 `voice_core_version`):
@@ -211,7 +233,8 @@ first). Real example from a test node (lists shortened with "..."; `local_ai_ver
     "stt": "/stt/",
     "tts": "/tts/",
     "translate": "/translate/",
-    "diarize": "/diarize/"
+    "diarize": "/diarize/",
+    "fetch": "/fetch/"
   }
 }
 ```

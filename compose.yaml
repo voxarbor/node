@@ -26,15 +26,16 @@ services:
 
   node-info:
     <<: *common
-    image: ${REGISTRY:-ghcr.io/voxarbor}/voice-core-node-info:${VOICE_CORE_TAG:-v0.6.1}
+    image: ${REGISTRY:-ghcr.io/voxarbor}/voice-core-node-info:${VOICE_CORE_TAG:-v0.7.0}
     environment:
       <<: *env
-      VOICE_CORE_VERSION: ${VOICE_CORE_TAG:-v0.6.1}
+      VOICE_CORE_VERSION: ${VOICE_CORE_TAG:-v0.7.0}
       STT_MODEL: ${STT_MODEL:-deepdml/faster-whisper-large-v3-turbo-ct2}
       STT_IMAGE: ghcr.io/speaches-ai/speaches:0.8.3-cpu
-      TTS_IMAGE: ${REGISTRY:-ghcr.io/voxarbor}/voice-core-tts:${VOICE_CORE_TAG:-v0.6.1}
-      TRANSLATE_IMAGE: ${REGISTRY:-ghcr.io/voxarbor}/voice-core-translate:${VOICE_CORE_TAG:-v0.6.1}
-      DIARIZE_IMAGE: ${REGISTRY:-ghcr.io/voxarbor}/voice-core-diarize:${VOICE_CORE_TAG:-v0.6.1}
+      TTS_IMAGE: ${REGISTRY:-ghcr.io/voxarbor}/voice-core-tts:${VOICE_CORE_TAG:-v0.7.0}
+      TRANSLATE_IMAGE: ${REGISTRY:-ghcr.io/voxarbor}/voice-core-translate:${VOICE_CORE_TAG:-v0.7.0}
+      DIARIZE_IMAGE: ${REGISTRY:-ghcr.io/voxarbor}/voice-core-diarize:${VOICE_CORE_TAG:-v0.7.0}
+      FETCH_IMAGE: ${REGISTRY:-ghcr.io/voxarbor}/voice-core-fetch:${VOICE_CORE_TAG:-v0.7.0}
     deploy:
       resources:
         limits: { cpus: "0.5", memory: 128m }
@@ -61,7 +62,7 @@ services:
 
   tts:
     <<: *common
-    image: ${REGISTRY:-ghcr.io/voxarbor}/voice-core-tts:${VOICE_CORE_TAG:-v0.6.1}
+    image: ${REGISTRY:-ghcr.io/voxarbor}/voice-core-tts:${VOICE_CORE_TAG:-v0.7.0}
     environment:
       <<: *env
       ENABLE_UI: "false"   # compose.ui.yaml turns the web UI on
@@ -86,7 +87,7 @@ services:
 
   translate:
     <<: *common
-    image: ${REGISTRY:-ghcr.io/voxarbor}/voice-core-translate:${VOICE_CORE_TAG:-v0.6.1}
+    image: ${REGISTRY:-ghcr.io/voxarbor}/voice-core-translate:${VOICE_CORE_TAG:-v0.7.0}
     environment:
       <<: *env
       TRANSLATE_MODEL: nllb-600m
@@ -105,7 +106,7 @@ services:
 
   diarize:
     <<: *common
-    image: ${REGISTRY:-ghcr.io/voxarbor}/voice-core-diarize:${VOICE_CORE_TAG:-v0.6.1}
+    image: ${REGISTRY:-ghcr.io/voxarbor}/voice-core-diarize:${VOICE_CORE_TAG:-v0.7.0}
     environment:
       <<: *env
       IDLE_TTL: "600"
@@ -118,6 +119,23 @@ services:
       resources:
         limits: { cpus: "${DIARIZE_CPUS:-4}", memory: 3g }
 
+  # optional: YouTube metadata / subtitles / audio fetched from this node's IP (COMPOSE_PROFILES=fetch)
+  fetch:
+    <<: *common
+    profiles: ["fetch"]
+    image: ${REGISTRY:-ghcr.io/voxarbor}/voice-core-fetch:${VOICE_CORE_TAG:-v0.7.0}
+    environment:
+      <<: *env
+      QUEUE_MAX: ${FETCH_QUEUE_MAX:-4}
+      YTDLP_PROXY: ${YTDLP_PROXY:-}            # optional outbound proxy
+    volumes:
+      - fetch-config:/config                  # optional cookies.txt
+    tmpfs:
+      - /tmp:uid=65534,gid=65534,size=512m
+    deploy:
+      resources:
+        limits: { cpus: "${FETCH_CPUS:-1}", memory: 1g }
+
   # one-shot model setup (idempotent): Opus-MT models into the translate cache, Whisper model into STT
   init-opus:
     image: ${REGISTRY:-ghcr.io/voxarbor}/voice-core-models-opus:${OPUS_MODELS_TAG:-1}
@@ -126,7 +144,7 @@ services:
     restart: "no"
 
   init-stt:
-    image: ${REGISTRY:-ghcr.io/voxarbor}/voice-core-node-info:${VOICE_CORE_TAG:-v0.6.1}
+    image: ${REGISTRY:-ghcr.io/voxarbor}/voice-core-node-info:${VOICE_CORE_TAG:-v0.7.0}
     command: ["python", "init_models.py"]
     environment:
       <<: *env
@@ -140,3 +158,4 @@ volumes:
   tts-config:
   tts-jobs:
   translate-cache:
+  fetch-config:
