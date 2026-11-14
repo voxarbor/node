@@ -244,7 +244,15 @@ async def _plan(text: str, req: SpeechRequest) -> list[dict]:
 async def health() -> dict:
     loading = _warming is not None and not _warming.done()  # models are being loaded by /v1/warmup
     return {"status": "ok", "loaded": _pool is not None and not loading, "loading": loading, "idle_ttl": IDLE_TTL,
-            "ui": ENABLE_UI, "jobs": JOBS.counts(), "busy": _busy, "queue_max": QUEUE_MAX}
+            "ui": ENABLE_UI, "jobs": JOBS.counts(), "busy": _busy, "queue_max": QUEUE_MAX, "device": _device()}
+
+
+def _device() -> str:
+    """cpu | cuda: what the model worker uses (known once it started), else what was asked for."""
+    try:
+        return open(worker.DEVICE_FILE).read().strip() or "cpu"
+    except OSError:
+        return os.environ.get("TTS_DEVICE", "cpu")
 
 
 # Voice gender, from the median pitch of a test phrase measured for every preset (2026-11-13): Holos female voices are

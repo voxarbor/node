@@ -1,0 +1,32 @@
+# GPU node (NVIDIA, CUDA 12.8+ driver, nvidia-container-toolkit): STT and TTS on the GPU, the rest stays on the CPU.
+#   docker compose -f compose.yaml -f compose.gpu.yaml --env-file .env up -d     (+ compose.ui.yaml for the web UI)
+# Check first:  docker run --rm --gpus all ubuntu:24.04 nvidia-smi
+x-gpu: &gpu
+  deploy:
+    resources:
+      reservations:
+        devices:
+          - { driver: nvidia, count: all, capabilities: [gpu, utility, compute] }
+
+services:
+  stt:
+    <<: *gpu
+    image: ${STT_GPU_IMAGE:-ghcr.io/speaches-ai/speaches:0.8.3-cuda-12.6.3}   # upstream CUDA build, pinned
+    environment:
+      WHISPER__INFERENCE_DEVICE: cuda
+      WHISPER__COMPUTE_TYPE: ${STT_GPU_COMPUTE_TYPE:-float16}
+
+  tts:
+    <<: *gpu
+    image: ${REGISTRY:-ghcr.io/voxarbor}/voice-core-tts-cuda:${VOICE_CORE_TAG:-v0.8.0}
+    environment:
+      TTS_DEVICE: cuda
+      HOLOS_BACKEND: pytorch
+      QUEUE_MAX: ${TTS_GPU_QUEUE_MAX:-16}   # a GPU node is fast: let the coordinator queue more
+
+  node-info:
+    <<: *gpu   # only to read the GPU name / VRAM / load with nvidia-smi
+    environment:
+      STT_DEVICE: cuda
+      STT_IMAGE: ${STT_GPU_IMAGE:-ghcr.io/speaches-ai/speaches:0.8.3-cuda-12.6.3}
+      TTS_IMAGE: ${REGISTRY:-ghcr.io/voxarbor}/voice-core-tts-cuda:${VOICE_CORE_TAG:-v0.8.0}

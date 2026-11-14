@@ -96,10 +96,25 @@ def _cached_first(load):
         constants.HF_HUB_OFFLINE = False
 
 
+DEVICE_FILE = "/tmp/tts-device"  # the device the worker really uses, read by /health (the API process stays torch-free)
+
+
+def device() -> str:
+    """TTS_DEVICE=cuda (GPU image + compose.gpu.yaml) when torch sees a GPU, else cpu."""
+    import torch
+
+    return "cuda" if os.environ.get("TTS_DEVICE", "cpu") == "cuda" and torch.cuda.is_available() else "cpu"
+
+
 def init() -> None:
     import torch
 
     torch.set_num_threads(int(os.environ.get("TORCH_THREADS", "4")))
+    try:
+        with open(DEVICE_FILE, "w") as f:
+            f.write(device())
+    except OSError:
+        pass
 
 
 def _stress():
@@ -269,7 +284,7 @@ def _holos():
             import torch
             from holos.models import HolosTTS
 
-            m = HolosTTS(os.path.join(HOLOS_DIR, "holos.pt"), device="cpu",
+            m = HolosTTS(os.path.join(HOLOS_DIR, "holos.pt"), device=device(),
                          voices_path=os.path.join(HOLOS_DIR, "voices.pt"))
 
             def gen(ps, voice, speed):

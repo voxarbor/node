@@ -18,7 +18,13 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        service: [tts, translate, diarize, node-info, fetch]
+        include:  # image = what is pushed (voice-core-<image>); args = extra build args
+          - { service: tts, image: tts, args: "" }
+          - { service: tts, image: tts-cuda, args: "TORCH_VARIANT=cu128" }   # GPU nodes (compose.gpu.yaml)
+          - { service: translate, image: translate, args: "" }
+          - { service: diarize, image: diarize, args: "" }
+          - { service: node-info, image: node-info, args: "" }
+          - { service: fetch, image: fetch, args: "" }
     steps:
       - uses: actions/checkout@v4
         with: { fetch-depth: 2 }
@@ -38,7 +44,7 @@ jobs:
           echo "release=v$(cat VERSION)" >> "$GITHUB_OUTPUT"
           echo "version=$v" >> "$GITHUB_OUTPUT"; echo "sha=$(git rev-parse --short=12 HEAD)" >> "$GITHUB_OUTPUT"
       - name: free disk (the tts image is ~7 GB)
-        if: steps.changed.outputs.build && matrix.service == 'tts'
+        if: steps.changed.outputs.build && startsWith(matrix.image, 'tts')
         run: sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL && df -h /
       - uses: docker/setup-buildx-action@v3
         if: steps.changed.outputs.build
@@ -51,13 +57,15 @@ jobs:
           context: services/${{ matrix.service }}
           push: true
           tags: |
-            ghcr.io/voxarbor/node-${{ matrix.service }}:${{ steps.v.outputs.version }}
-            ghcr.io/voxarbor/node-${{ matrix.service }}:sha-${{ steps.v.outputs.sha }}
-            ghcr.io/voxarbor/node-${{ matrix.service }}:latest
-            ghcr.io/voxarbor/node-${{ matrix.service }}:${{ steps.v.outputs.release }}
-          build-args: VOICE_CORE_RELEASE=${{ steps.v.outputs.release }}
+            ghcr.io/voxarbor/node-${{ matrix.image }}:${{ steps.v.outputs.version }}
+            ghcr.io/voxarbor/node-${{ matrix.image }}:sha-${{ steps.v.outputs.sha }}
+            ghcr.io/voxarbor/node-${{ matrix.image }}:latest
+            ghcr.io/voxarbor/node-${{ matrix.image }}:${{ steps.v.outputs.release }}
+          build-args: |
+            VOICE_CORE_RELEASE=${{ steps.v.outputs.release }}
+            ${{ matrix.args }}
           labels: |
             org.opencontainers.image.source=https://github.com/voxarbor/node
             org.opencontainers.image.version=${{ steps.v.outputs.release }}
-          cache-from: type=gha,scope=${{ matrix.service }}
-          cache-to: type=gha,scope=${{ matrix.service }},mode=max
+          cache-from: type=gha,scope=${{ matrix.image }}
+          cache-to: type=gha,scope=${{ matrix.image }},mode=max

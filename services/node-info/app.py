@@ -8,6 +8,8 @@ import hashlib
 import json
 import os
 import secrets
+import shutil
+import subprocess
 import time
 import urllib.error
 import urllib.request
@@ -25,6 +27,7 @@ SERVICES = {  # name -> base URL inside the node's compose network
     "fetch": os.environ.get("FETCH_URL", "http://fetch:8000"),  # optional (compose profile fetch)
 }
 IMAGES = {k: os.environ.get(f"{k.upper()}_IMAGE", "") for k in SERVICES}
+DEVICES = {k: os.environ.get(f"{k.upper()}_DEVICE", "") for k in SERVICES}  # set by compose.gpu.yaml for stt
 STT_MODEL = os.environ.get("STT_MODEL", "deepdml/faster-whisper-large-v3-turbo-ct2")
 STATIC_TTL = float(os.environ.get("STATIC_TTL", "60"))
 _cache: dict = {"at": 0.0, "static": None}
@@ -53,9 +56,20 @@ def host() -> dict:
     except OSError:
         load = None
     gpu = any(os.path.exists(p) for p in ("/dev/nvidia0", "/dev/nvidiactl"))
-    return {"cpu_cores": os.cpu_count(), "ram_total_gb": round(mem.get("MemTotal", 0) / 1024 ** 3, 1),
-            "ram_available_gb": round(mem.get("MemAvailable", 0) / 1024 ** 3, 1), "load_avg": load,
-            "gpu": gpu, "gpu_used": False}  # services here are CPU-only builds
+    out = {"cpu_cores": os.cpu_count(), "ram_total_gb": round(mem.get("MemTotal", 0) / 1024 ** 3, 1),
+           "ram_available_gb": round(mem.get("MemAvailable", 0) / 1024 ** 3, 1), "load_avg": load,
+           "gpu": gpu, "gpu_used": False, "gpu_name": None, "vram_gb": None}
+    if shutil.which("nvidia-smi"):  # node-info sees the GPU only with compose.gpu.yaml
+        try:
+            line = subprocess.run(["nvidia-smi", "--query-gpu=name,memory.total,memory.used,utilization.gpu",
+                                   "--format=csv,noheader,nounits"], capture_output=True, text=True,
+                                  timeout=5).stdout.strip().splitlines()[0]
+            name, total, used, util = [x.strip() for x in line.split(",")]
+            out.update(gpu=True, gpu_name=name, vram_gb=round(float(total) / 1024, 1),
+                       vram_used_gb=round(float(used) / 1024, 1), gpu_util_pct=int(float(util)))
+        except Exception:
+            pass
+    return out
 
 
 def static_info() -> dict:
@@ -84,11 +98,12 @@ def static_info() -> dict:
 def capabilities() -> dict:
     services, st = {}, static_info()
     for name, url in SERVICES.items():
-        s = {"image": IMAGES[name] or None}
+        s = {"image": IMAGES[name] or None, "device": "cpu"}
         try:
             h = get(f"{url}/health", timeout=3)  # speaches wants the token even on /health
             s.update(available=True, healthy=h.get("status", "ok") == "ok", loaded=h.get("loaded"),
                      busy=h.get("busy"), queue_max=h.get("queue_max"))
+            s["device"] = DEVICES.get(name) or h.get("device") or "cpu"  # stt: speaches says nothing, so env
             if name == "tts":
                 s.update(jobs=h.get("jobs"), **{k: v for k, v in st.get("tts", {}).items()})
                 try:  # lets a coordinator check cheaply that this node's stress lexicon matches its source
@@ -116,9 +131,11 @@ def capabilities() -> dict:
         except Exception as exc:
             s.update(available=False, healthy=False, error=type(exc).__name__)
         services[name] = s
+    node = host()
+    node["gpu_used"] = any(s.get("device") == "cuda" for s in services.values())
     return {"schema": 1, "voice_core_version": VERSION, "local_ai_version": VERSION,
             "voice_core_tag": TAG or None, "voice_core_release": RELEASE, "generated_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
-            "node": host(), "services": services,
+            "node": node, "services": services,
             "gateway_paths": {k: f"/{k}/" for k in SERVICES}}
 
 

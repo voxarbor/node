@@ -3,7 +3,9 @@ ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1 PIP_NO_CACHE_DIR=1 PIP_DEFAULT_
     HF_HOME=/cache/hf STANZA_RESOURCES_DIR=/cache/stanza GRADIO_ANALYTICS_ENABLED=False \
     VOICES_DIR=/opt/space/voices SINGLE_STYLE=/opt/space/filatov.pt
 RUN apt-get update && apt-get install -y --no-install-recommends git git-lfs ffmpeg && rm -rf /var/lib/apt/lists/*
-RUN pip install --index-url https://download.pytorch.org/whl/cpu torch==2.8.0 torchaudio==2.8.0
+# TORCH_VARIANT=cu128 builds the GPU image (voice-core-tts-cuda): CUDA 12.8 wheels, which include Blackwell (RTX 50xx)
+ARG TORCH_VARIANT=cpu
+RUN pip install --index-url https://download.pytorch.org/whl/${TORCH_VARIANT} torch==2.8.0 torchaudio==2.8.0
 COPY requirements.txt /tmp/
 RUN pip install -r /tmp/requirements.txt \
     && pip install --no-deps git+https://github.com/patriotyk/ukrainian-word-stress@d5b37ea0abe9711930d9c3b0b13edec5a0675512

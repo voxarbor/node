@@ -11,6 +11,7 @@ rebuilt; "Run workflow" rebuilds all). Tags: the service version (`services/<nam
 | image | what |
 |---|---|
 | `ghcr.io/voxarbor/node-tts` | TTS API (UI off on nodes); HolosTTS + StyleTTS2 + accentuk **light** weights are inside (~7 GB) |
+| `ghcr.io/voxarbor/node-tts-cuda` | the same TTS built with CUDA 12.8 PyTorch (incl. RTX 50xx), for `compose.gpu.yaml` |
 | `ghcr.io/voxarbor/node-translate` | translate + punctuation; models download on first use into a volume |
 | `ghcr.io/voxarbor/node-diarize` | diarization; its two small ONNX models (~35 MB) are inside |
 | `ghcr.io/voxarbor/node-fetch` | optional YouTube fetch: yt-dlp + deno (JS challenges), no models (~400 MB) |
@@ -44,6 +45,15 @@ Paths are stripped and passed on to the services (TTS contract: `docs/API.md`):
 Request bodies and responses are streamed (no buffering: TTS streams, SSE, diarize uploads); upstream response
 timeouts are 30–60 min. 
 
+## GPU nodes (since 0.8.0)
+
+An NVIDIA node (driver for CUDA 12.8+, nvidia-container-toolkit; check `docker run --rm --gpus all ubuntu:24.04 nvidia-smi`)
+adds `-f compose.gpu.yaml`: STT runs the upstream speaches CUDA image (`STT_GPU_IMAGE`, float16), TTS the
+`voice-core-tts-cuda` image with `TTS_DEVICE=cuda` and `queue_max` 16 (`TTS_GPU_QUEUE_MAX`); translate, diarize and fetch
+stay on the CPU. `/capabilities` then shows `services.stt.device` / `services.tts.device` = `cuda` (TTS reports what its
+worker really uses once it has loaded; it falls back to `cpu` if torch sees no GPU) and `node.gpu_name`, `vram_gb`,
+`vram_used_gb`, `gpu_util_pct`, `gpu_used`.
+
 ## Fetch (optional, since 0.7.0)
 
 For a coordinator whose own IP YouTube blocks: the node fetches with its IP. Off by default; enable with
@@ -69,7 +79,7 @@ Fields are only added within a schema version. `voice_core_version` is the relea
 `busy` = jobs submitted and not finished, `queue_max` = above it the service answers 429, `loaded` = models in RAM.
 `tts.lexicon_sha256` (sha256 of the lexicon file text, as `GET /tts/v1/lexicon` returns it) and `lexicon_rules`
 let a coordinator check that a node's stress lexicon matches its source; push a new one with `PUT /tts/v1/lexicon`.
-`fetch` (when enabled) adds `ytdlp_version`, `deno_version`, `last_bot_check`, `last_ok`; when it is off it shows
+Every service has `device` (`cpu` | `cuda`) since 0.8.0. `fetch` (when enabled) adds `ytdlp_version`, `deno_version`, `last_bot_check`, `last_ok`; when it is off it shows
 `available: false`.
 TTS gives every voice's `genders` (male | female | child) and display `labels`; `voices` order = priority (favorites
 first). Real example from a test node (lists shortened with "..."; `local_ai_version` is a deprecated alias of
