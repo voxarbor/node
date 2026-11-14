@@ -36,7 +36,8 @@ Size threads and CPU limits to the machine in `.env`. Models load on demand and 
 ## Development
 
 Images are built by GitHub Actions (`.github/workflows/images.yml`) into `ghcr.io/voxarbor/node-<service>`
-(tags `<VERSION>`, `sha-<12>`, `latest`); `models-opus.yml` builds the Opus-MT data image. Tests:
+(tags `v<release>` from the root `VERSION`, the service's own version, `sha-<12>`, `latest`; pin
+`VOICE_CORE_TAG=v<release>` on nodes); `models-opus.yml` builds the Opus-MT data image. Tests:
 `tests/test_speech.py` (text pipeline, no models) and `tests/test_pool.py` (worker queue), run inside the images.
 
 License: Apache-2.0.

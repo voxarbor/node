@@ -1,11 +1,12 @@
 # Worker-node images to GHCR (private): ghcr.io/voxarbor/node-<service>:<version> | sha-<short> | latest.
-# A push to main rebuilds only the services whose directory changed; "Run workflow" rebuilds all.
+# A push to main rebuilds only the services whose directory changed; "Run workflow" or a change of the root
+# VERSION (the voice-core release) rebuilds all, which then also carry the tag v<VERSION> (what nodes pin).
 # Models are not part of these builds except the TTS weights already in its Dockerfile (see docs/worker.md).
 name: images
 on:
   push:
     branches: [main]
-    paths: ["services/tts/**", "services/translate/**", "services/diarize/**", "services/node-info/**", ".github/workflows/images.yml"]
+    paths: ["services/tts/**", "services/translate/**", "services/diarize/**", "services/node-info/**", "VERSION", ".github/workflows/images.yml"]
   workflow_dispatch:
 permissions:
   contents: read
@@ -25,7 +26,7 @@ jobs:
         id: changed
         run: |
           if [ "${{ github.event_name }}" = workflow_dispatch ] || ! git rev-parse -q --verify HEAD~1 >/dev/null \
-             || git diff --name-only HEAD~1 HEAD | grep -qE '^(services/${{ matrix.service }}/|\.github/workflows/images\.yml)'; then
+             || git diff --name-only HEAD~1 HEAD | grep -qE '^(services/${{ matrix.service }}/|VERSION$|\.github/workflows/images\.yml)'; then
             echo build=true >> "$GITHUB_OUTPUT"
           fi
       - name: version
@@ -34,6 +35,7 @@ jobs:
         run: |
           s=${{ matrix.service }}
           v=$(cat services/$s/VERSION)
+          echo "release=v$(cat VERSION)" >> "$GITHUB_OUTPUT"
           echo "version=$v" >> "$GITHUB_OUTPUT"; echo "sha=$(git rev-parse --short=12 HEAD)" >> "$GITHUB_OUTPUT"
       - name: free disk (the tts image is ~7 GB)
         if: steps.changed.outputs.build && matrix.service == 'tts'
@@ -52,6 +54,7 @@ jobs:
             ghcr.io/voxarbor/node-${{ matrix.service }}:${{ steps.v.outputs.version }}
             ghcr.io/voxarbor/node-${{ matrix.service }}:sha-${{ steps.v.outputs.sha }}
             ghcr.io/voxarbor/node-${{ matrix.service }}:latest
+            ghcr.io/voxarbor/node-${{ matrix.service }}:${{ steps.v.outputs.release }}
           labels: org.opencontainers.image.source=https://github.com/voxarbor/node
           cache-from: type=gha,scope=${{ matrix.service }}
           cache-to: type=gha,scope=${{ matrix.service }},mode=max

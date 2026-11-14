@@ -26,15 +26,15 @@ services:
 
   node-info:
     <<: *common
-    image: ${REGISTRY:-ghcr.io/voxarbor}/voice-core-node-info:${VOICE_CORE_TAG:-latest}
+    image: ${REGISTRY:-ghcr.io/voxarbor}/voice-core-node-info:${VOICE_CORE_TAG:-v0.6.0}
     environment:
       <<: *env
-      VOICE_CORE_VERSION: ${VOICE_CORE_TAG:-latest}
+      VOICE_CORE_VERSION: ${VOICE_CORE_TAG:-v0.6.0}
       STT_MODEL: ${STT_MODEL:-deepdml/faster-whisper-large-v3-turbo-ct2}
       STT_IMAGE: ghcr.io/speaches-ai/speaches:0.8.3-cpu
-      TTS_IMAGE: ${REGISTRY:-ghcr.io/voxarbor}/voice-core-tts:${VOICE_CORE_TAG:-latest}
-      TRANSLATE_IMAGE: ${REGISTRY:-ghcr.io/voxarbor}/voice-core-translate:${VOICE_CORE_TAG:-latest}
-      DIARIZE_IMAGE: ${REGISTRY:-ghcr.io/voxarbor}/voice-core-diarize:${VOICE_CORE_TAG:-latest}
+      TTS_IMAGE: ${REGISTRY:-ghcr.io/voxarbor}/voice-core-tts:${VOICE_CORE_TAG:-v0.6.0}
+      TRANSLATE_IMAGE: ${REGISTRY:-ghcr.io/voxarbor}/voice-core-translate:${VOICE_CORE_TAG:-v0.6.0}
+      DIARIZE_IMAGE: ${REGISTRY:-ghcr.io/voxarbor}/voice-core-diarize:${VOICE_CORE_TAG:-v0.6.0}
     deploy:
       resources:
         limits: { cpus: "0.5", memory: 128m }
@@ -61,7 +61,7 @@ services:
 
   tts:
     <<: *common
-    image: ${REGISTRY:-ghcr.io/voxarbor}/voice-core-tts:${VOICE_CORE_TAG:-latest}
+    image: ${REGISTRY:-ghcr.io/voxarbor}/voice-core-tts:${VOICE_CORE_TAG:-v0.6.0}
     environment:
       <<: *env
       ENABLE_UI: "false"   # compose.ui.yaml turns the web UI on
@@ -86,7 +86,7 @@ services:
 
   translate:
     <<: *common
-    image: ${REGISTRY:-ghcr.io/voxarbor}/voice-core-translate:${VOICE_CORE_TAG:-latest}
+    image: ${REGISTRY:-ghcr.io/voxarbor}/voice-core-translate:${VOICE_CORE_TAG:-v0.6.0}
     environment:
       <<: *env
       TRANSLATE_MODEL: nllb-600m
@@ -105,7 +105,7 @@ services:
 
   diarize:
     <<: *common
-    image: ${REGISTRY:-ghcr.io/voxarbor}/voice-core-diarize:${VOICE_CORE_TAG:-latest}
+    image: ${REGISTRY:-ghcr.io/voxarbor}/voice-core-diarize:${VOICE_CORE_TAG:-v0.6.0}
     environment:
       <<: *env
       IDLE_TTL: "600"
@@ -126,7 +126,7 @@ services:
     restart: "no"
 
   init-stt:
-    image: ${REGISTRY:-ghcr.io/voxarbor}/voice-core-node-info:${VOICE_CORE_TAG:-latest}
+    image: ${REGISTRY:-ghcr.io/voxarbor}/voice-core-node-info:${VOICE_CORE_TAG:-v0.6.0}
     command: ["python", "init_models.py"]
     environment:
       <<: *env
