@@ -1,0 +1,500 @@
+"""voice-core connector: the node dials out to a coordinator and serves its requests (docs/connect.md, protocol 1).
+
+One WebSocket to COORDINATOR_URL; the coordinator's requests (the gateway contract: /stt /tts /translate /diarize
+/fetch /capabilities) are multiplexed on it by stream id and executed against the local gateway. Without
+COORDINATOR_URL the connector only answers /health. Stdlib + websockets + aiohttp."""
+
+from __future__ import annotations
+
+import asyncio
+import collections
+import json
+import logging
+import os
+import random
+import secrets
+import ssl
+import struct
+import time
+from urllib.parse import urlsplit, urlunsplit
+
+import aiohttp
+from aiohttp import web
+import websockets
+from websockets.asyncio.client import connect
+from websockets.exceptions import ConnectionClosed, InvalidStatus
+
+VERSION = os.environ.get("CONNECTOR_VERSION", "dev")
+RELEASE = os.environ.get("VOICE_CORE_RELEASE", "dev")
+COORDINATOR_URL = os.environ.get("COORDINATOR_URL", "").strip().rstrip("/")
+GATEWAY = os.environ.get("GATEWAY_URL", "http://gateway:8080")
+LOCAL_TOKEN = os.environ.get("API_KEY", "")  # the node's own gateway token (NODE_TOKEN); never sent to the coordinator
+JOIN_CODE = os.environ.get("NODE_JOIN_CODE", "").strip()
+NODE_NAME = os.environ.get("NODE_NAME", "").strip() or os.uname().nodename
+MAX_STREAMS = int(os.environ.get("CONNECT_MAX_STREAMS", "16"))
+INSECURE = os.environ.get("CONNECT_INSECURE_TLS", "") == "1"
+STATE_DIR = os.environ.get("CONNECT_STATE_DIR", "/state")
+STATE = os.path.join(STATE_DIR, "node.json")
+ENROLL_STATE = os.path.join(STATE_DIR, "enroll.json")
+
+PROTOCOL = 1
+CHUNK = 256 * 1024                 # binary frame payload
+TEXT_MAX = 1024 * 1024             # text frame limit
+WINDOW = 1024 * 1024               # initial flow-control window per stream and direction
+INLINE_MAX = 64 * 1024
+BODY_MAX = 1024 ** 3               # request body (as the gateway)
+IDLE_S = float(os.environ.get("CONNECT_IDLE_S", "600"))
+CAPS_EVERY = 30.0
+REQ_HEADERS = {"content-type", "accept", "last-event-id", "range", "x-request-id"}
+RES_HEADERS = {"content-type", "content-length", "content-disposition", "retry-after"}
+PATHS = ("/stt/", "/tts/", "/translate/", "/diarize/", "/fetch/")
+METHODS = {"GET", "POST", "PUT", "DELETE", "PATCH", "HEAD"}
+
+log = logging.getLogger("connector")
+status = {"connected": False, "coordinator": None, "node_id": None, "last_error": None, "since": None,
+          "streams": 0, "retry_at": None}
+
+
+# ---------------------------------------------------------------- state ------------------------------------------
+def load(path: str) -> dict | None:
+    try:
+        return json.load(open(path))
+    except (OSError, ValueError):
+        return None
+
+
+def save(path: str, data: dict) -> None:
+    os.makedirs(STATE_DIR, exist_ok=True)
+    tmp = path + ".tmp"
+    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(fd, "w") as f:
+        json.dump(data, f)
+    os.replace(tmp, path)
+
+
+def ws_url(base: str) -> str:
+    u = urlsplit(base)
+    scheme = {"https": "wss", "http": "ws", "wss": "wss", "ws": "ws"}[u.scheme]
+    if scheme == "ws" and not (INSECURE or u.hostname in ("localhost", "127.0.0.1", "::1")):
+        raise ValueError("COORDINATOR_URL must be https:// (plain http only for localhost or CONNECT_INSECURE_TLS=1)")
+    return urlunsplit((scheme, u.netloc, u.path.rstrip("/") + "/v1/nodes/connect", "", ""))
+
+
+def ssl_context() -> ssl.SSLContext | None:
+    ctx = ssl.create_default_context()
+    if INSECURE:
+        ctx.check_hostname = False
+        ctx.verify_mode = ssl.CERT_NONE
+    return ctx
+
+
+class Retry(Exception):
+    def __init__(self, delay: float, reason: str):
+        super().__init__(reason)
+        self.delay, self.reason = delay, reason
+
+
+def retry_after(headers, default: float) -> float:
+    try:
+        return max(1.0, float(headers.get("Retry-After")))
+    except (TypeError, ValueError):
+        return default
+
+
+# ---------------------------------------------------------------- enrollment -------------------------------------
+async def enroll(http: aiohttp.ClientSession) -> dict:
+    """POST /v1/nodes/enroll once; the result lives in /state/node.json and is never requested again."""
+    st = load(ENROLL_STATE) or {}
+    if st.get("code") != JOIN_CODE:
+        st = {"code": JOIN_CODE, "request_id": secrets.token_hex(16)}
+        save(ENROLL_STATE, st)
+    body = {"code": JOIN_CODE, "request_id": st["request_id"], "name": NODE_NAME, "connector_version": VERSION}
+    if st.get("node_id"):
+        body["node_id"] = st["node_id"]
+    async with http.post(f"{COORDINATOR_URL}/v1/nodes/enroll", json=body, ssl=ssl_context()) as r:
+        if r.status == 200:
+            d = await r.json()
+            save(STATE, {"node_id": d["node_id"], "node_token": d["node_token"], "enrolled": time.time()})
+            try:
+                os.remove(ENROLL_STATE)
+            except OSError:
+                pass
+            log.info("enrolled as node %s; NODE_JOIN_CODE can be removed from .env", d["node_id"])
+            return load(STATE)
+        if r.status in (401, 410):
+            raise Retry(600, f"enroll refused ({r.status}): a new join code is needed")
+        if r.status == 429:
+            raise Retry(retry_after(r.headers, 60), "enroll rate limited (429)")
+        raise Retry(30, f"enroll failed ({r.status})")
+
+
+# ---------------------------------------------------------------- streams ----------------------------------------
+class Stream:
+    def __init__(self, sid: int, priority: int):
+        self.id, self.priority = sid, priority
+        self.body: asyncio.Queue = asyncio.Queue()   # request body chunks from the coordinator, None = end
+        self.recv_allowed = WINDOW                     # bytes the coordinator may still send us
+        self.recv_unacked = 0                          # consumed bytes not yet granted back
+        self.send_credit = WINDOW                      # bytes we may still send the coordinator
+        self.credit = asyncio.Event()
+        self.credit.set()
+        self.chunks: collections.deque = collections.deque()
+        self.task: asyncio.Task | None = None
+        self.closed = False
+        self.idle = False
+        self.last = time.monotonic()
+
+
+class Link:
+    """One WebSocket session: reader, prioritised round-robin writer, heartbeat, capabilities, request streams."""
+
+    def __init__(self, ws, http: aiohttp.ClientSession, state: dict, heartbeat: float = 10):
+        self.ws, self.http, self.state = ws, http, state
+        self.heartbeat = heartbeat
+        self.streams: dict[int, Stream] = {}
+        self.max_streams = MAX_STREAMS
+        self.control: collections.deque = collections.deque()
+        self.wake = asyncio.Event()
+        self.last_rx = time.monotonic()
+        self.rr: collections.deque = collections.deque()  # stream ids in round-robin order
+        self.out: dict[int, Stream] = {}                   # streams with frames still to send
+        self.caps_hash = None
+        self.caps_sent = 0.0
+
+    # ---- outgoing
+    def send_json(self, obj: dict) -> None:
+        self.control.append(json.dumps(obj, ensure_ascii=False))
+        self.wake.set()
+
+    async def writer(self) -> None:
+        while True:
+            if self.control:
+                await self.ws.send(self.control.popleft())
+                continue
+            st = self.next_stream()
+            if st is None:
+                self.wake.clear()
+                if not self.control and self.next_stream(peek=True) is None:
+                    await self.wake.wait()
+                continue
+            item = st.chunks.popleft()
+            if not st.chunks and st.closed:
+                self.out.pop(st.id, None)
+            if isinstance(item, bytes):
+                await self.ws.send(struct.pack(">I", st.id) + item)
+            else:  # the stream's closing frame, queued after its data (res_end / res_error)
+                await self.ws.send(item)
+
+    def next_stream(self, peek: bool = False) -> Stream | None:
+        """Round-robin over streams with queued data; viewer streams (lowest priority value) first."""
+        ready = [x for x in self.out.values() if x.chunks]
+        if not ready:
+            return None
+        if peek:
+            return ready[0]
+        best = min(x.priority for x in ready)
+        for _ in range(len(self.rr)):
+            i = self.rr[0]
+            self.rr.rotate(-1)
+            x = self.out.get(i)
+            if x is not None and x.chunks and x.priority == best:
+                return x
+        return next(x for x in ready if x.priority == best)
+
+    def queue_data(self, st: Stream, data: bytes) -> None:
+        st.chunks.append(data)
+        st.last = time.monotonic()
+        self.out[st.id] = st
+        self.wake.set()
+
+    def close_stream(self, st: Stream, frame: dict) -> None:
+        """Exactly one closing frame per stream, sent after its data."""
+        if st.closed:
+            return
+        st.closed = True
+        st.chunks.append(json.dumps(frame))
+        self.out[st.id] = st
+        self.streams.pop(st.id, None)
+        status["streams"] = len(self.streams)
+        self.wake.set()
+
+    # ---- incoming
+    async def reader(self) -> None:
+        async for msg in self.ws:
+            self.last_rx = time.monotonic()
+            if isinstance(msg, bytes):
+                self.on_data(msg)
+                continue
+            if len(msg) > TEXT_MAX:
+                await self.ws.close(4009, "text frame too large")
+                return
+            try:
+                f = json.loads(msg)
+            except ValueError:
+                continue
+            t = f.get("type")
+            if t == "req":
+                self.on_req(f)
+            elif t == "req_end":
+                s = self.streams.get(f.get("id"))
+                if s:
+                    s.body.put_nowait(None)
+            elif t == "cancel":
+                s = self.streams.get(f.get("id"))
+                if s and s.task:
+                    s.task.cancel()
+            elif t == "window":
+                s = self.streams.get(f.get("id"))
+                if s and isinstance(f.get("bytes"), int) and f["bytes"] > 0:
+                    s.send_credit += f["bytes"]
+                    s.credit.set()
+            elif t == "ping":
+                self.send_json({"type": "pong", "t": f.get("t")})
+            elif t == "caps_get":
+                await self.send_caps(force=True)
+            elif t == "rotate_token" and isinstance(f.get("node_token"), str) and f["node_token"]:
+                self.state = {**self.state, "node_token": f["node_token"], "rotated": time.time()}
+                save(STATE, self.state)
+                self.send_json({"type": "rotated"})
+                log.info("node token rotated")
+
+    def on_data(self, msg: bytes) -> None:
+        if len(msg) < 4:
+            return
+        (sid,) = struct.unpack(">I", msg[:4])
+        s = self.streams.get(sid)
+        if s is None:
+            return
+        data = msg[4:]
+        if len(data) > CHUNK or len(data) > s.recv_allowed:
+            self.fail(s, "protocol_error", "body sent past the flow-control window")
+            return
+        s.recv_allowed -= len(data)
+        s.last = time.monotonic()
+        s.body.put_nowait(data)
+
+    def on_req(self, f: dict) -> None:
+        sid = f.get("id")
+        if not isinstance(sid, int) or sid in self.streams:
+            return
+        s = Stream(sid, int(f.get("priority", 1)) if str(f.get("priority", 1)).isdigit() else 1)
+        self.streams[sid] = s
+        self.rr.append(sid)
+        status["streams"] = len(self.streams)
+        method, path = str(f.get("method", "")).upper(), str(f.get("path", ""))
+        if len(self.streams) > self.max_streams:
+            return self.fail(s, "too_many_streams", f"more than {self.max_streams} streams")
+        if method not in METHODS or ".." in path or not (path.startswith(PATHS) or path.split("?")[0] == "/capabilities"):
+            return self.fail(s, "forbidden_path", f"{method} {path[:80]} is not forwarded")
+        if f.get("body") == "inline" and len(str(f.get("inline", "")).encode()) > INLINE_MAX:
+            return self.fail(s, "bad_request", "inline body over 64 KiB")
+        s.task = asyncio.create_task(self.run(s, f, method, path))
+
+    def fail(self, s: Stream, code: str, detail: str) -> None:
+        self.close_stream(s, {"type": "res_error", "id": s.id, "code": code, "detail": detail})
+
+    # ---- one request against the local gateway
+    async def request_body(self, s: Stream):
+        total = 0
+        while True:
+            chunk = await s.body.get()
+            if chunk is None:
+                return
+            total += len(chunk)
+            if total > BODY_MAX:
+                raise ValueError("request body over 1 GiB")
+            s.recv_unacked += len(chunk)
+            if s.recv_unacked >= CHUNK:  # grant the consumed bytes back
+                s.recv_allowed += s.recv_unacked
+                self.send_json({"type": "window", "id": s.id, "bytes": s.recv_unacked})
+                s.recv_unacked = 0
+            yield chunk
+
+    async def run(self, s: Stream, f: dict, method: str, path: str) -> None:
+        headers = {k: str(v) for k, v in (f.get("headers") or {}).items() if k.lower() in REQ_HEADERS}
+        headers["Authorization"] = f"Bearer {LOCAL_TOKEN}"
+        mode = f.get("body", "none")
+        data = (str(f.get("inline", "")).encode() if mode == "inline" else
+                self.request_body(s) if mode == "stream" else None)
+        deadline = f.get("deadline_ms")
+        try:
+            coro = self.forward(s, method, path, headers, data)
+            if isinstance(deadline, (int, float)) and deadline > 0:
+                await asyncio.wait_for(coro, deadline / 1000)
+            else:
+                await coro
+        except asyncio.TimeoutError:
+            self.fail(s, "deadline", "deadline_ms passed")
+        except asyncio.CancelledError:
+            if s.idle:
+                self.fail(s, "idle_timeout", f"no frames for {IDLE_S:.0f} s")
+            else:
+                self.fail(s, "cancelled", "cancelled")
+        except aiohttp.ServerTimeoutError:
+            self.fail(s, "upstream_timeout", "the local gateway did not answer in time")
+        except (aiohttp.ClientError, OSError) as exc:
+            self.fail(s, "upstream_unreachable", f"local gateway: {type(exc).__name__}")
+        except ValueError as exc:
+            self.fail(s, "bad_request", str(exc))
+
+    async def forward(self, s: Stream, method: str, path: str, headers: dict, data) -> None:
+        async with self.http.request(method, GATEWAY + path, headers=headers, data=data, allow_redirects=False,
+                                     timeout=aiohttp.ClientTimeout(total=None, sock_connect=10, sock_read=3600)) as r:
+            out = {k.lower(): v for k, v in r.headers.items()
+                   if k.lower() in RES_HEADERS or k.lower().startswith("x-")}
+            self.send_json({"type": "res", "id": s.id, "status": r.status, "headers": out})
+            async for chunk in r.content.iter_any():
+                for i in range(0, len(chunk), CHUNK):
+                    part = chunk[i:i + CHUNK]
+                    while s.send_credit < len(part):  # wait for the coordinator to grant more
+                        s.credit.clear()
+                        await s.credit.wait()
+                    s.send_credit -= len(part)
+                    self.queue_data(s, part)
+        self.close_stream(s, {"type": "res_end", "id": s.id})
+
+    # ---- periodic
+    async def send_caps(self, force: bool = False) -> None:
+        try:
+            async with self.http.get(f"{GATEWAY}/capabilities", headers={"Authorization": f"Bearer {LOCAL_TOKEN}"},
+                                     timeout=aiohttp.ClientTimeout(total=15)) as r:
+                caps = await r.json()
+        except Exception as exc:
+            caps = {"schema": 1, "error": f"local capabilities: {type(exc).__name__}"}
+        stable = json.dumps({k: v for k, v in caps.items() if k not in ("generated_at", "node")}, sort_keys=True)
+        if force or stable != self.caps_hash or time.monotonic() - self.caps_sent >= CAPS_EVERY:
+            self.caps_hash, self.caps_sent = stable, time.monotonic()
+            self.send_json({"type": "caps", "capabilities": caps})
+
+    async def ticker(self) -> None:
+        last_ping = 0.0
+        while True:
+            await asyncio.sleep(1)
+            now = time.monotonic()
+            if now - self.last_rx > 3 * self.heartbeat:
+                await self.ws.close(4008, "heartbeat timeout")
+                return
+            if now - last_ping >= self.heartbeat:
+                last_ping = now
+                self.send_json({"type": "ping", "t": int(time.time() * 1000)})
+            for s in list(self.streams.values()):
+                if now - s.last > IDLE_S and s.task and not s.idle:
+                    s.idle = True
+                    s.task.cancel()
+            if int(now) % 5 == 0:
+                await self.send_caps()
+
+    async def serve(self) -> None:
+        tasks = [asyncio.create_task(c) for c in (self.reader(), self.writer(), self.ticker())]
+        try:
+            done, _ = await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
+            for t in done:
+                if t.exception():
+                    raise t.exception()
+        finally:
+            for t in tasks:
+                t.cancel()
+            for s in list(self.streams.values()):
+                if s.task:
+                    s.task.cancel()
+
+
+# ---------------------------------------------------------------- main loop --------------------------------------
+async def session(http: aiohttp.ClientSession, state: dict) -> None:
+    url = ws_url(COORDINATOR_URL)
+    headers = {"Authorization": f"Bearer {state['node_token']}", "X-Voice-Core-Protocol": str(PROTOCOL)}
+    try:
+        ws_ctx = connect(url, additional_headers=headers, ssl=ssl_context() if url.startswith("wss") else None,
+                         max_size=TEXT_MAX + 64, ping_interval=None, open_timeout=20, close_timeout=5)
+        async with ws_ctx as ws:
+            link = Link(ws, http, state)
+            caps = None
+            try:
+                async with http.get(f"{GATEWAY}/capabilities", headers={"Authorization": f"Bearer {LOCAL_TOKEN}"},
+                                    timeout=aiohttp.ClientTimeout(total=15)) as r:
+                    caps = await r.json()
+            except Exception:
+                caps = {"schema": 1, "error": "local capabilities unavailable"}
+            await ws.send(json.dumps({"type": "hello", "protocol": PROTOCOL, "node_name": NODE_NAME,
+                                      "max_streams": MAX_STREAMS, "connector_version": VERSION,
+                                      "voice_core_version": caps.get("voice_core_version", RELEASE),
+                                      "capabilities": caps}, ensure_ascii=False))
+            welcome = json.loads(await asyncio.wait_for(ws.recv(), 20))
+            if welcome.get("type") != "welcome":
+                raise Retry(30, "no welcome from the coordinator")
+            link.heartbeat = min(60, max(5, float(welcome.get("heartbeat_s", 10))))
+            link.max_streams = min(MAX_STREAMS, int(welcome.get("max_streams", MAX_STREAMS)))
+            status.update(connected=True, coordinator=COORDINATOR_URL, node_id=welcome.get("node_id"),
+                          since=time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()), last_error=None)
+            log.info("connected to %s as node %s", COORDINATOR_URL, welcome.get("node_id"))
+            await link.serve()
+            state.update(link.state)  # a rotated token
+    except InvalidStatus as exc:
+        code, h = exc.response.status_code, exc.response.headers
+        if code in (401, 426):
+            raise Retry(600, f"upgrade refused: {code}")
+        raise Retry(retry_after(h, 0), f"upgrade refused: {code}")
+    except ConnectionClosed as exc:
+        code = exc.rcvd.code if exc.rcvd else 1006
+        reason = exc.rcvd.reason if exc.rcvd else "connection lost"
+        if code in (4001, 4002, 4004):
+            raise Retry(600, f"closed {code}: {reason}")
+        if code == 4003:
+            raise Retry(30, f"closed 4003: replaced by another connection of this node")
+        raise Retry(0, f"closed {code}: {reason}")
+    finally:
+        status["connected"] = False
+
+
+async def main_loop() -> None:
+    if not COORDINATOR_URL:
+        log.info("COORDINATOR_URL not set: idle")
+        return
+    backoff = 1.0
+    async with aiohttp.ClientSession(auto_decompress=False) as http:
+        while True:
+            started = time.monotonic()
+            try:
+                state = load(STATE)
+                if state is None:
+                    if not JOIN_CODE:
+                        raise Retry(600, "not enrolled: set NODE_JOIN_CODE")
+                    state = await enroll(http)
+                elif JOIN_CODE:
+                    log.info("already enrolled: NODE_JOIN_CODE is ignored and can be removed from .env")
+                await session(http, state)
+                delay, reason = 0.0, "closed"
+            except Retry as r:
+                delay, reason = r.delay, r.reason
+            except (OSError, asyncio.TimeoutError, aiohttp.ClientError, websockets.exceptions.WebSocketException) as exc:
+                delay, reason = 0.0, f"{type(exc).__name__}: {exc}"[:200]
+            if time.monotonic() - started > 60:
+                backoff = 1.0
+            wait = delay or backoff
+            backoff = min(60.0, backoff * 2)
+            wait *= random.uniform(0.8, 1.2)
+            status.update(last_error=reason, retry_at=time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(time.time() + wait)))
+            log.warning("%s; retry in %.0f s", reason, wait)
+            await asyncio.sleep(wait)
+
+
+async def health(_: web.Request) -> web.Response:
+    return web.json_response({"status": "ok", "version": VERSION, "protocol": PROTOCOL, "enabled": bool(COORDINATOR_URL),
+                              "enrolled": os.path.isfile(STATE), "insecure_tls": INSECURE, **status})
+
+
+async def main() -> None:
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
+    if INSECURE:
+        log.warning("CONNECT_INSECURE_TLS=1: the coordinator's certificate is NOT verified (tests only)")
+    app = web.Application()
+    app.router.add_get("/health", health)
+    runner = web.AppRunner(app, access_log=None)
+    await runner.setup()
+    await web.TCPSite(runner, "0.0.0.0", 8000).start()
+    await main_loop()
+    await asyncio.Event().wait()
+
+
+if __name__ == "__main__":
+    asyncio.run(main())

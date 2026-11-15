@@ -46,7 +46,7 @@ Request bodies and responses are streamed (no buffering: TTS streams, SSE, diari
 timeouts are 30–60 min. 
 
 Nodes behind NAT can instead dial out to the coordinator over one WebSocket and serve the same requests through it:
-`docs/connect.md` (draft, protocol 1).
+`docs/connect.md` (protocol 1, since 0.10.0: service `connector`, enabled by `COORDINATOR_URL`).
 
 ## GPU nodes (since 0.8.0)
 

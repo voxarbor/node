@@ -1,6 +1,9 @@
-# Node connect: outbound link to a coordinator (protocol 1) — DRAFT for review
+# Node connect: outbound link to a coordinator (protocol 1)
 
-Status: proposal, not implemented. Nothing in the existing gateway contract (`docs/gateway.md`) changes; this adds a
+Status: implemented in voice-core 0.10.0 (service `connector`, approved 2026-11-15). Enable on a node: set
+`COORDINATOR_URL` and `NODE_JOIN_CODE` (and optionally `NODE_NAME`) in `.env`, then `docker compose up -d`; check
+`docker compose exec connector python -c "import urllib.request;print(urllib.request.urlopen('http://127.0.0.1:8000/health').read().decode())"`
+or its log. Self-check: `tests/test_connect.py` (fake coordinator + fake gateway). Nothing in the existing gateway contract (`docs/gateway.md`) changes; this adds a
 second transport for the same requests.
 
 ## Why

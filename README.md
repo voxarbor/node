@@ -25,6 +25,9 @@ The first start pulls the images (~11 GB) and downloads ~3 GB of models. Then ev
 `Authorization: Bearer <NODE_TOKEN>` to `http://<host>:8790` (`GATEWAY_PORT`). Optional web UI «Озвучка» (history,
 streaming playback, voice and lexicon tools): `docker compose -f compose.yaml -f compose.ui.yaml --env-file .env up -d`.
 
+Behind NAT / for a public coordinator: the node can dial out instead (`COORDINATOR_URL` + `NODE_JOIN_CODE` in `.env`,
+docs/connect.md); then `GATEWAY_PORT` need not be open.
+
 NVIDIA GPU: `COMPOSE_FILE=compose.yaml:compose.gpu.yaml` in `.env` (STT and TTS on the GPU; every plain `docker compose`
 command and update keeps it; docs/gateway.md "GPU nodes").
 
