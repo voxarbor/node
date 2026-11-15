@@ -19,8 +19,7 @@ MODEL_REPOS = {
     "multi": "patriotyk/styletts2_ukrainian_multispeaker",
     "single": "patriotyk/styletts2_ukrainian_single",
 }
-HOLOS_DIR = os.environ.get("HOLOS_DIR", "/opt/holos")  # holos.pt, voices.pt, voices.json, onnx-int8/
-HOLOS_BACKEND = os.environ.get("HOLOS_BACKEND", "pytorch")  # pytorch (FP32 reference) | onnx-int8 (faster)
+HOLOS_DIR = os.environ.get("HOLOS_DIR", "/opt/holos")  # holos.pt, voices.pt, voices.json, voice_encoder.pt
 # Engines on offer: HolosTTS by default; StyleTTS2 is opt-in (its preset voices are named after real narrators:
 # check the rights before using them publicly). TTS_ENGINES="holos,styletts2" enables both.
 ENGINES = tuple(e for e in os.environ.get("TTS_ENGINES", "holos").replace(" ", "").split(",") if e in ("holos", "styletts2")) or ("holos",)
@@ -320,32 +319,18 @@ def _holos():
     if _holos_model is None:
         import numpy as np
 
-        if HOLOS_BACKEND == "pytorch":
-            import torch
-            from holos.models import HolosTTS
+        import torch
+        from holos.models import HolosTTS
 
-            m = HolosTTS(os.path.join(HOLOS_DIR, "holos.pt"), device=device(),
-                         voices_path=os.path.join(HOLOS_DIR, "voices.pt"))
+        # PyTorch FP32 only (owner: quality first; the ONNX/INT8 builds were removed from the image in 0.10.2)
+        m = HolosTTS(os.path.join(HOLOS_DIR, "holos.pt"), device=device(),
+                     voices_path=os.path.join(HOLOS_DIR, "voices.pt"))
 
-            def gen(ps, voice, speed):
-                if voice.startswith("custom:"):
-                    voice = torch.tensor(custom_vector(voice[7:]), dtype=torch.float32)
-                with torch.inference_mode():
-                    return m.generate(ps, voice, speed=speed).squeeze().cpu().numpy().astype(np.float32)
-        else:
-            import onnxruntime as ort
-            from holos_onnx import HolosTTS
-
-            so = ort.SessionOptions()
-            so.intra_op_num_threads = int(os.environ.get("TORCH_THREADS", "4"))
-            so.inter_op_num_threads = 1
-            so.add_session_config_entry("session.intra_op.allow_spinning", "0")
-            m = HolosTTS(os.path.join(HOLOS_DIR, HOLOS_BACKEND), session_options=so)
-
-            def gen(ps, voice, speed):
-                if voice.startswith("custom:"):
-                    voice = np.asarray(custom_vector(voice[7:]), dtype=np.float32)
-                return np.asarray(m.generate(ps, voice, speed=speed), dtype=np.float32).squeeze()
+        def gen(ps, voice, speed):
+            if voice.startswith("custom:"):
+                voice = torch.tensor(custom_vector(voice[7:]), dtype=torch.float32)
+            with torch.inference_mode():
+                return m.generate(ps, voice, speed=speed).squeeze().cpu().numpy().astype(np.float32)
         _holos_model = gen
     return _holos_model
 
