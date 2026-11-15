@@ -45,6 +45,9 @@ Paths are stripped and passed on to the services (TTS contract: `docs/API.md`):
 Request bodies and responses are streamed (no buffering: TTS streams, SSE, diarize uploads); upstream response
 timeouts are 30–60 min. 
 
+Nodes behind NAT can instead dial out to the coordinator over one WebSocket and serve the same requests through it:
+`docs/connect.md` (draft, protocol 1).
+
 ## GPU nodes (since 0.8.0)
 
 An NVIDIA node (driver for CUDA 12.8+, nvidia-container-toolkit; check `docker run --rm --gpus all ubuntu:24.04 nvidia-smi`)
