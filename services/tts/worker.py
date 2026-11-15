@@ -40,6 +40,7 @@ STRESS = os.environ.get("TTS_STRESS", "accentuk")  # accentuk | word-stress
 ACCENTUK_MODE = os.environ.get("ACCENTUK_MODE", "light")  # light (CT2 INT8) | full (FP32 + spaCy TRF)
 VERBALIZER = os.environ.get("TTS_VERBALIZER", "accentuk")  # accentuk (span model) | m2m100 (seq2seq, slower)
 ACUTE = "\u0301"
+PAUSE_CHARS = "[\ue00a-\ue1f4]"  # explicit pauses, see speech.PAUSE_RE (10 ms steps from U+E000)
 LONG = "\u02d0"  # IPA length mark: "++" in text = stressed and lengthened vowel (за++мок -> ˈzaːmɔk)
 _holos_model = None
 _accentuk = None
@@ -176,9 +177,17 @@ _VOWELS = set("аеєиіїоуюяАЕЄИІЇОУЮЯ")
 def _keep_user_stress(src: str, out: str) -> str:
     """Words the user marked with "+" keep the user's stress, whatever the stressifier chose."""
     bare = lambda w: w.replace(ACUTE, "").replace(LONG, "").lower()
-    marked = {bare(w): w for w in _WORD.findall(src) if ACUTE in w}
-    if not marked:
+    words = _WORD.findall(src)
+    if not any(ACUTE in w for w in words):
         return out
+    if len(_WORD.findall(out)) == len(words):  # by position: one word marked twice differently keeps both marks
+        it = iter(words)
+
+        def pos(m):
+            w = next(it)
+            return w if ACUTE in w and bare(w) == bare(m.group(0)) else m.group(0)
+        return _WORD.sub(pos, out)
+    marked = {bare(w): w for w in words if ACUTE in w}  # the stressifier changed the words: match by spelling
     return _WORD.sub(lambda m: marked.get(bare(m.group(0)), m.group(0)), out)
 
 
@@ -299,7 +308,7 @@ def _prepare(t: str) -> str:
     # The stress dictionary only knows the ASCII apostrophe: "пʼятсот"/"п’ятсот" were missed and guessed wrong.
     t = re.sub(r"[ʼ’‘`]", "'", t)
     t = re.sub(r"[᠆‐‑‒–—―⁻₋−⸺⸻]", "-", t)
-    if t[-1] not in ".?!:-":
+    if t[-1] not in ".?!:-,;…":  # a piece cut by a pause ends with "," (continuation), see synthesize
         t += "."
     t = re.sub(r" - ", ": ", t)
     return stress(t)
@@ -348,8 +357,6 @@ def synthesize(text: str, voice: str | None, speed: float, model: str, pause_ms:
     from ipa_uk import ipa
 
     started = time.monotonic()
-    if do_verbalize:
-        text = verbalize(text)
     if engine == "holos":
         holos, voice = _holos(), resolve_voice("holos", voice)
         generate = lambda ps: holos(ps, voice, speed)
@@ -366,21 +373,40 @@ def synthesize(text: str, voice: str | None, speed: float, model: str, pause_ms:
                 return tts(tts.tokenizer.encode(ps), speed=speed, s_prev=style).cpu().numpy().astype(np.float32)
         group = 20
     pause = np.zeros(int(SAMPLE_RATE * pause_ms / 1000), dtype=np.float32)
-    chunks, parts = [], []
-    for part in split_to_parts(text, group_chars=group):
-        if not part.strip():
+    silence = lambda ms: np.zeros(int(SAMPLE_RATE * ms / 1000), dtype=np.float32)
+    chunks, parts, said, explicit = [], [], [], 0
+    # explicit pause markup (private characters from speech.normalize) is cut out before the verbalizer sees it
+    tokens = re.split(f"({PAUSE_CHARS})", text)
+    for n, piece in enumerate(tokens):
+        if re.fullmatch(PAUSE_CHARS, piece):
+            explicit += (ord(piece) - 0xE000) * 10
             continue
-        stressed = _prepare(part)
-        ps = ipa(stressed)
-        if not ps:
+        if not piece.strip(" ,.;:—–-\n"):
             continue
-        wav = generate(ps)
-        if chunks and len(pause):
-            chunks.append(pause)
-        chunks.append(wav)
-        parts.append(stressed)
-    if not chunks:
+        piece = _before_pause(piece, tokens, n)
+        if do_verbalize:
+            piece = verbalize(piece)
+        said.append(piece)
+        for part in split_to_parts(piece, group_chars=group):
+            if not part.strip():
+                continue
+            stressed = _prepare(part)
+            ps = ipa(stressed)
+            if not ps:
+                continue
+            wav = generate(ps)
+            if explicit:
+                chunks.append(silence(explicit))
+                explicit = 0
+            elif chunks and len(pause):
+                chunks.append(pause)
+            chunks.append(wav)
+            parts.append(stressed)
+    if not parts:
         raise ValueError("nothing to synthesize")
+    if explicit:
+        chunks.append(silence(explicit))
+    text = " ".join(said)
     audio = np.concatenate(chunks)
     peak = float(np.abs(audio).max())
     if peak > 0.99:
@@ -398,11 +424,34 @@ def warmup(engine: str = DEFAULT_ENGINE) -> bool:
     return True
 
 
+def _before_pause(piece: str, tokens: list[str], n: int) -> str:
+    """Text right before an explicit pause without its own punctuation is read as unfinished (comma), not as the
+    end of a sentence."""
+    piece = piece.rstrip()
+    if n + 1 < len(tokens) and re.fullmatch(PAUSE_CHARS, tokens[n + 1]) and piece and piece[-1] not in ".?!:;,…-—":
+        piece += ","
+    return piece
+
+
 def prepare(text: str, do_verbalize: bool) -> dict:
-    """Show what the model will read: verbalized text and the stressed sentence parts."""
-    if do_verbalize:
-        text = verbalize(text)
-    return {"text": text, "stressed": [_prepare(p) for p in split_to_parts(text) if p.strip()]}
+    """Show what the model will read: verbalized text and the stressed sentence parts; explicit pauses are shown as
+    "{пауза 0.8}" both in the text and as items of their own in "stressed"."""
+    shown, stressed = [], []
+    tokens = re.split(f"({PAUSE_CHARS})", text)
+    for n, piece in enumerate(tokens):
+        if re.fullmatch(PAUSE_CHARS, piece):
+            mark = "{пауза %s}" % f"{(ord(piece) - 0xE000) / 100:g}"
+            shown.append(mark)
+            stressed.append(mark)
+            continue
+        if not piece.strip(" ,.;:—–-\n"):
+            continue
+        piece = _before_pause(piece, tokens, n)
+        if do_verbalize:
+            piece = verbalize(piece)
+        shown.append(piece.strip())
+        stressed += [_prepare(p) for p in split_to_parts(piece) if p.strip()]
+    return {"text": " ".join(shown), "stressed": stressed}
 
 
 _encoder = None

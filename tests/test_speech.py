@@ -143,3 +143,29 @@ for w, want in {"Minecraft": "ма+йнкрафт", "Telegram": "те+легра
                 "Link": "лі+нк", "Batman": "бе+тмен", "MC": "ем-сі"}.items():
     assert phonemize.name(w) == want, (w, phonemize.name(w))
 print("english names ok")
+
+# Explicit pauses "{пауза N}" (0.10.1): private characters inside, cut into segments, never in captions or spoken
+t = speech.normalize("Раз {пауза 1,5} два {pause 0.3с} три {пауза 9} чотири {пауза 0.01}.")
+assert speech.show_pauses(t).split() == "Раз {пауза 1.5} два {пауза 0.3} три {пауза 5} чотири {пауза 0.1} .".split(), speech.show_pauses(t)
+assert "{" not in speech.strip_pauses(t) and speech.strip_pauses(t).startswith("Раз два"), speech.strip_pauses(t)
+segs, _ = speech.plan("Перше речення. {пауза 2} Друге речення.\n\nНовий абзац {пауза 0,5} кінець.")
+assert [(s["text"], s["pause_after_ms"]) for s in segs] == [("Перше речення.", 2000), ("Друге речення.", 550),
+                                                            ("Новий абзац", 500), ("кінець.", 0)], segs
+assert segs[2]["spoken"] == "Новий абзац,", segs[2]  # cut mid-sentence: read as unfinished
+assert not any(ch in s["text"] + s["spoken"] for s in segs for ch in "{}"), segs
+assert speech.plan("Без пауз. Зовсім.")[0] == [{"text": "Без пауз. Зовсім.", "pause_after_ms": 0, "spoken": "Без пауз. Зовсім."}]
+text, _ = speech.prepare_text("Зачекайте {пауза 1} і слухайте.")
+assert speech.show_pauses(text).split() == "Зачекайте {пауза 1} і слухайте.".split(), text
+print("pauses ok")
+
+# A word already marked with "+"/"++" keeps exactly that mark, also next to the same word unmarked or marked
+# differently (the coordinator applies lexicon rules itself before synthesis)
+import worker
+A, L = worker.ACUTE, worker.LONG
+src = f"Старий за{A}мок і новий за{A}{L}мок, во{A}да і вода."
+auto = f"Стари{A}й за{A}мок і{A} нови{A}й за{A}мок, во{A}да і{A} вода{A}."
+out = worker._keep_user_stress(src, auto)
+assert f"за{A}мок і" in out and f"за{A}{L}мок," in out and f"во{A}да" in out and f"вода{A}" in out, out
+kind, pat, right = lexicon.parse_rule("замок => за++мок")  # a lexicon word rule skips a word already marked
+assert pat.sub(lambda m: lexicon._apply_marks(m.group(0), right), "за+мок і замок") == "за+мок і за++мок"
+print("user stress kept ok")

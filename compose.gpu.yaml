@@ -18,7 +18,7 @@ services:
 
   tts:
     <<: *gpu
-    image: ${REGISTRY:-ghcr.io/voxarbor}/voice-core-tts-cuda:${VOICE_CORE_TAG:-v0.10.0}
+    image: ${REGISTRY:-ghcr.io/voxarbor}/voice-core-tts-cuda:${VOICE_CORE_TAG:-v0.10.1}
     environment:
       TTS_DEVICE: cuda
       HOLOS_BACKEND: pytorch
@@ -29,4 +29,4 @@ services:
     environment:
       STT_DEVICE: cuda
       STT_IMAGE: ${STT_GPU_IMAGE:-ghcr.io/speaches-ai/speaches:0.8.3-cuda-12.6.3}
-      TTS_IMAGE: ${REGISTRY:-ghcr.io/voxarbor}/voice-core-tts-cuda:${VOICE_CORE_TAG:-v0.10.0}
+      TTS_IMAGE: ${REGISTRY:-ghcr.io/voxarbor}/voice-core-tts-cuda:${VOICE_CORE_TAG:-v0.10.1}

@@ -46,6 +46,28 @@ Errors: `{"detail": "..."}` with 4xx/5xx; `429` = the model worker is busy (retr
   `Т. Г. Шевченко => Тарас Григорович Шевченко` / `т. зв. => так званий` (replace: any other text, `+` optional;
   "Т.Г." matches "Т. Г." too).
 
+## Text markup (since 0.10.1)
+
+What the text may contain besides plain words; `GET /v1/voices` -> `engines.<engine>.markup` and `/capabilities` ->
+`services.tts.engines.<engine>.markup` list it for editors as `[{id, title, kind, syntax?, example?, insert?, open?,
+close?, param?, values?, min?, max?, min_s?, max_s?, default?, note?}]`. `kind`: `inline` (insert `insert` at the
+cursor), `wrap` (put `open`/`close` around the selection), `replace` (rewrite the selected word), `param` (not markup:
+the request parameter `param`).
+
+- `+` right after the stressed vowel (`за+мок`); `++` = stressed and lengthened (`за++мок`). A word that already has
+  `+`/`++` keeps exactly that mark: neither the stress model nor a lexicon word rule changes it (also when the same
+  word appears unmarked or marked differently in the same text).
+- Pronunciation of a word: write it as it should sound, in Cyrillic with `+` (`Ма+йнкрафт`); for every text: a
+  lexicon rule.
+- `{пауза N}` (also `{pause N}`, `{пауза 0,8}`, `{пауза 0.8 с}`): exactly N seconds of silence at that point instead of
+  the usual pause, N = 0.1-5 (values outside are clamped). Text right before it without punctuation is read as
+  unfinished (as before a comma). It never reaches the captions, `segments[].text`/`spoken`, or the verbalizer;
+  `/v1/text/prepare` shows it as `{пауза N}` (also as an item of its own in `stressed`). In jobs and
+  `/speech/stream` a pause before the first words or after the last ones is dropped; one-shot `/v1/audio/speech`
+  keeps it. With `target_duration` pauses are stretched together with the speech.
+- `( )` / `[ ]`: an aside, read as the `brackets` parameter says (aside | skip | announce | voice).
+- An empty line between paragraphs: +400 ms; punctuation `, . … — ? !`: natural pauses.
+
 ## Custom voices (zero-shot Holos, since 0.9.0)
 
 A new Holos voice from a reference recording, without training: the encoder turns the recording into a vector of

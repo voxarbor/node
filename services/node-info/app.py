@@ -83,7 +83,8 @@ def static_info() -> dict:
         info["tts"] = {"default_engine": v["default_engine"], "engines": {
             e: {"default": d["default"], "favorites": d["favorites"], "voices": d["voices"],
                 "genders": {n: m["gender"] for n, m in d.get("meta", {}).items()},
-                "labels": {n: m["label"] for n, m in d.get("meta", {}).items()}} for e, d in v["engines"].items()}}
+                "labels": {n: m["label"] for n, m in d.get("meta", {}).items()},
+                "markup": d.get("markup", [])} for e, d in v["engines"].items()}}
     except Exception as exc:
         info["tts"] = {"error": type(exc).__name__}
     try:

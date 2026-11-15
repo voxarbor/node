@@ -128,9 +128,40 @@ def english(text: str, lang: str = "en-us", cache: dict | None = None) -> tuple[
     return _LATIN.sub(sub, text), used
 
 
+# Explicit pause markup "{пауза 0.8}" (also "{pause 0.8}", "0,8", "0.8 с"): 0.1-5 s of silence at that point. Right
+# after reading the request it becomes one private-use character carrying the length in 10 ms steps, so cleanup,
+# English names, stress and the verbalizer never see (or say) its digits; segments are cut there and captions
+# never show it.
+PAUSE_RE = re.compile(r"\{\s*(?:пауза|pause)\s*:?\s*(\d{1,2}(?:[.,]\d{1,3})?)\s*(?:с|сек|s)?\.?\s*\}", re.I)
+PAUSE_MIN_MS, PAUSE_MAX_MS = 100, 5000
+PAUSE_CHAR = "[\ue00a-\ue1f4]"
+_PAUSE_CHAR = re.compile(PAUSE_CHAR)
+
+
+def _pause_char(m: re.Match) -> str:
+    ms = round(float(m.group(1).replace(",", ".")) * 1000)
+    return chr(0xE000 + min(PAUSE_MAX_MS, max(PAUSE_MIN_MS, ms)) // 10)
+
+
+def pause_len(ch: str) -> int:
+    return (ord(ch) - 0xE000) * 10
+
+
+def show_pauses(text: str) -> str:
+    """Private pause characters back to the markup, for text shown to people (prepare)."""
+    return _PAUSE_CHAR.sub(lambda m: " {пауза %s} " % f"{pause_len(m.group(0)) / 1000:g}", text).replace("  ", " ")
+
+
+def strip_pauses(text: str) -> str:
+    return re.sub(r"\s{2,}", " ", _PAUSE_CHAR.sub(" ", text)).strip()
+
+
 def normalize(text: str) -> str:
-    """Unicode fixes for text copied from PDFs: composed letters, й written as і/и + breve, soft hyphens."""
+    """Unicode fixes for text copied from PDFs: composed letters, й written as і/и + breve, soft hyphens; the pause
+    markup becomes its private character (above). Private-use characters already in the text are dropped."""
     text = unicodedata.normalize("NFC", text.replace("\u00ad", ""))
+    text = re.sub(r"[\ue000-\uf8ff]", "", text)
+    text = PAUSE_RE.sub(_pause_char, text)
     return re.sub(r"[іи]\u0306", "й", re.sub(r"[ІИ]\u0306", "Й", text))
 
 
@@ -248,18 +279,35 @@ def plan(text: str, *, clean_text: bool = True, use_english: bool = True, pause_
     for p, para in enumerate(paras):
         group = ""
         for sent in _sentences(para):
-            limit = FIRST_CHARS if not segs else SEG_CHARS
-            if group and len(group) + 1 + len(sent) > limit:
-                segs.append({"text": group, "pause_after_ms": pause_ms})
-                group = sent
-            else:
-                group = f"{group} {sent}".strip()
+            for piece in re.split(f"({PAUSE_CHAR})", sent):
+                if _PAUSE_CHAR.fullmatch(piece):  # explicit pause: the segment ends here, with exactly that silence
+                    if group:
+                        segs.append({"text": group, "pause_after_ms": 0, "_explicit": True, "_cut": True})
+                        group = ""
+                    if segs and segs[-1].get("_explicit"):
+                        segs[-1]["pause_after_ms"] += pause_len(piece)
+                    elif segs:
+                        segs[-1].update(pause_after_ms=pause_len(piece), _explicit=True)
+                    continue  # a pause before the first words of a long text is dropped (one-shot speech keeps it)
+                piece = piece.strip()
+                if not piece.strip(" ,.;:—–-"):
+                    continue
+                limit = FIRST_CHARS if not segs else SEG_CHARS
+                if group and len(group) + 1 + len(piece) > limit:
+                    segs.append({"text": group, "pause_after_ms": pause_ms})
+                    group = piece
+                else:
+                    group = f"{group} {piece}".strip()
         if group:
             segs.append({"text": group, "pause_after_ms": pause_ms})
-        if segs and p < len(paras) - 1:
+        if segs and p < len(paras) - 1 and not segs[-1].get("_explicit"):
             segs[-1]["pause_after_ms"] = pause_ms + PARA_PAUSE_MS
-    if segs:
+    if segs and not segs[-1].get("_explicit"):
         segs[-1]["pause_after_ms"] = 0
+    for s in segs:
+        s.pop("_explicit", None)
+        if s.pop("_cut", False) and s["text"][-1] not in ".?!:;,…-—":
+            s["_comma"] = True  # cut by a pause mid-sentence: read as unfinished, captions unchanged
     for s in segs:
         spoken = initials(replace_rules(s["text"]), initials_mode)
         if use_english:
@@ -268,6 +316,8 @@ def plan(text: str, *, clean_text: bool = True, use_english: bool = True, pause_
         else:
             s["spoken"] = spoken
         s["spoken"] = speakable(s["spoken"], brackets, announce)
+        if s.pop("_comma", False):
+            s["spoken"] = s["spoken"].rstrip() + ","
     return segs, names
 
 

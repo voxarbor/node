@@ -305,6 +305,35 @@ def voice_meta(engine: str, names: list[str]) -> dict:
     return meta
 
 
+# What a phrase editor may offer as buttons (published per engine in /v1/voices and /capabilities). kind: inline =
+# insert at the cursor ("insert"), wrap = put around the selection ("open"/"close"), replace = rewrite the selected
+# word as it should sound, param = not markup but a request parameter ("param").
+MARKUP = [
+    {"id": "stress", "title": "Наголос", "kind": "inline", "insert": "+",
+     "syntax": "+ одразу після наголошеного голосного", "example": "за+мок"},
+    {"id": "stress_long", "title": "Наголос із протяжним голосним", "kind": "inline", "insert": "++",
+     "syntax": "++ одразу після наголошеного голосного", "example": "за++мок"},
+    {"id": "respell", "title": "Вимова слова", "kind": "replace",
+     "syntax": "слово кирилицею так, як має звучати, з + на наголосі", "example": "Ма+йнкрафт",
+     "note": "для всіх текстів одразу: правило словника (Minecraft => Ма+йнкрафт)"},
+    {"id": "pause", "title": "Пауза", "kind": "inline", "insert": "{пауза 0.8}",
+     "syntax": "{пауза N}: N секунд тиші, 0.1-5 (кома або крапка)", "example": "Зачекайте {пауза 1,5} і слухайте.",
+     "min_s": 0.1, "max_s": 5.0,
+     "note": "у субтитрах не видно; поза межами обрізається до 0.1 / 5 с; на початку чи в кінці довгого тексту (jobs, stream) ігнорується"},
+    {"id": "aside", "title": "Вставка в дужках", "kind": "wrap", "open": "(", "close": ")",
+     "example": "Він (як завжди) запізнився.", "note": "як читати, задає параметр brackets"},
+    {"id": "paragraph", "title": "Пауза абзацу", "kind": "inline", "insert": "\n\n",
+     "syntax": "порожній рядок між абзацами", "example": "Перше.\n\nДруге.", "note": "+400 мс до звичайної паузи"},
+    {"id": "punctuation", "title": "Природні паузи", "kind": "inline", "syntax": ", . … — ? !",
+     "example": "Так… Ні — ще ні."},
+    {"id": "brackets", "title": "Як читати дужки", "kind": "param", "param": "brackets",
+     "values": ["aside", "skip", "announce", "voice"], "default": "aside"},
+    {"id": "sentence_pause", "title": "Пауза між реченнями", "kind": "param", "param": "pause_ms",
+     "min": 0, "max": 3000, "default": 150, "note": "мс; /v1/audio/speech: 0 за замовчуванням"},
+    {"id": "speed", "title": "Темп", "kind": "param", "param": "speed", "min": 0.5, "max": 2.0, "default": 1.0},
+]
+
+
 def voices_info() -> dict:
     engines = {}
     for engine in worker.ENGINES:
@@ -313,7 +342,7 @@ def voices_info() -> dict:
         favorites = list(dict.fromkeys(aliases.values()))  # in alias order, default first
         engines[engine] = {"default": aliases.get("male") or (favorites or names)[0], "aliases": aliases,
                            "favorites": favorites, "voices": favorites + [n for n in names if n not in favorites],
-                           "meta": voice_meta(engine, names)}
+                           "meta": voice_meta(engine, names), "markup": MARKUP}
     if "holos" in engines:  # custom (zero-shot) voices after the presets
         for vid, v in worker.custom_voices().items():
             engines["holos"]["voices"].append(f"custom:{vid}")
