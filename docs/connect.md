@@ -14,8 +14,13 @@ and new (node dials the coordinator) setups run side by side.
 
 - New compose service `connector` (image `voice-core-connector`, ~60 MB, stdlib + `websockets` + `aiohttp`, 0.25 CPU /
   128 MB). It runs on every node; without `COORDINATOR_URL` it idles.
-- Env: `COORDINATOR_URL` (`https://coord.example`, the WebSocket URL is derived), `NODE_TOKEN` (also the local gateway
-  token), optional `NODE_NAME`, `CONNECT_MAX_STREAMS` (default 16).
+- Env: `COORDINATOR_URL` (`https://coord.example`, the WebSocket URL is derived), `NODE_JOIN_CODE` (first start only),
+  optional `NODE_NAME`, `CONNECT_MAX_STREAMS` (default 16). `NODE_TOKEN` stays the local gateway token only.
+- Two credentials: the local `NODE_TOKEN` (connector -> local gateway) and the coordinator's `node_token` (connector ->
+  coordinator), kept in the connector's volume `connector-state` (`/state/node.json`, mode 600), never in `.env`, so a
+  rotation needs no file edits on the host.
+- TLS: the coordinator's certificate is always verified (system CAs). Only `CONNECT_INSECURE_TLS=1`, meant for tests,
+  turns verification off, and the connector then logs a warning on every connect.
 - It forwards only to the local gateway `http://gateway:8080` and only these path prefixes: `/stt/ /tts/ /translate/
   /diarize/ /fetch/ /capabilities`. Anything else is refused (`403 forbidden_path`). The connector adds the local
   `Authorization` itself; the coordinator never sends one, and the node token never travels inside request frames.
@@ -24,10 +29,12 @@ and new (node dials the coordinator) setups run side by side.
 ## Enrollment (one command on the node)
 
 1. The coordinator admin creates a join code (one-time, short-lived, e.g. 24 h).
-2. Installer: `install.sh --coordinator https://coord.example --join <code>`. It calls
+2. Installer: `install.sh --coordinator https://coord.example --join <code>` writes `COORDINATOR_URL`, `NODE_NAME` and
+   `NODE_JOIN_CODE` into `.env` and starts the stack. On its first start the connector calls
    `POST {COORDINATOR_URL}/v1/nodes/enroll {code, name, connector_version}` -> `200 {node_id, node_token}` (401 bad or
-   used code, 410 expired), writes `COORDINATOR_URL` and `NODE_TOKEN=<node_token>` into `.env` and starts the stack.
-3. From then on the node authenticates with `node_token`. Revoking it in the coordinator closes the node out (4001).
+   used code, 410 expired) and stores the result in `/state/node.json`; the join code is useless afterwards.
+3. From then on the node authenticates with `node_token`. Revoking it in the coordinator closes the node out (4001);
+   re-enrolling takes a new join code. The coordinator can rotate it at any time (`rotate_token`, below).
 
 ## Connection
 
@@ -44,11 +51,13 @@ Frames:
 
 | direction | frame | fields |
 |---|---|---|
-| node -> coord | `hello` | `protocol: 1`, `connector_version`, `voice_core_version`, `capabilities` (the full `/capabilities` object, schema 1) |
+| node -> coord | `hello` | `protocol: 1`, `node_name` (`NODE_NAME`), `connector_version`, `voice_core_version`, `capabilities` (the full `/capabilities` object, schema 1) |
 | coord -> node | `welcome` | `protocol: 1`, `node_id`, `heartbeat_s` (default 20), `max_streams` (≤ node's `CONNECT_MAX_STREAMS`) |
 | node -> coord | `caps` | `capabilities`: sent every 30 s and immediately when a service, voice, lexicon hash or version changes |
 | coord -> node | `caps_get` | asks for a `caps` now |
 | both | `ping` / `pong` | `t` (sender's clock, ms); each side pings every `heartbeat_s`; no frame at all for 3 × `heartbeat_s` = dead link |
+| coord -> node | `rotate_token` | `node_token`: the new credential; the connector writes it to `/state/node.json` (atomically) and answers |
+| node -> coord | `rotated` | after the new token is stored; the coordinator then invalidates the old one (the open connection stays; the next connect uses the new token) |
 
 ### Requests (multiplexed by stream id)
 
