@@ -32,7 +32,8 @@ and new (node dials the coordinator) setups run side by side.
 2. Installer: `install.sh --coordinator https://coord.example --join <code>` writes `COORDINATOR_URL`, `NODE_NAME` and
    `NODE_JOIN_CODE` into `.env` and starts the stack. On its first start the connector calls
    `POST {COORDINATOR_URL}/v1/nodes/enroll {code, name, connector_version}` -> `200 {node_id, node_token}` (401 bad or
-   used code, 410 expired) and stores the result in `/state/node.json`; the join code is useless afterwards.
+   used code, 410 expired) and stores the result in `/state/node.json`. When that file exists the connector never enrolls again and ignores
+   `NODE_JOIN_CODE` (logging once that it can be removed from `.env`; the code is single-use anyway).
 3. From then on the node authenticates with `node_token`. Revoking it in the coordinator closes the node out (4001);
    re-enrolling takes a new join code. The coordinator can rotate it at any time (`rotate_token`, below).
 
