@@ -89,9 +89,20 @@ def ssl_context() -> ssl.SSLContext | None:
 
 
 class Retry(Exception):
-    def __init__(self, delay: float, reason: str):
+    def __init__(self, delay: float, reason: str, unauthorized: bool = False):
         super().__init__(reason)
-        self.delay, self.reason = delay, reason
+        self.delay, self.reason, self.unauthorized = delay, reason, unauthorized
+
+
+def code_sha(code: str) -> str:
+    import hashlib
+
+    return hashlib.sha256(code.encode()).hexdigest()
+
+
+def fresh_code(state: dict | None) -> bool:
+    """NODE_JOIN_CODE is set and is not the code this node already enrolled with (only its sha256 is kept)."""
+    return bool(JOIN_CODE) and code_sha(JOIN_CODE) != (state or {}).get("join_code_sha256")
 
 
 def retry_after(headers, default: float) -> float:
@@ -102,19 +113,24 @@ def retry_after(headers, default: float) -> float:
 
 
 # ---------------------------------------------------------------- enrollment -------------------------------------
-async def enroll(http: aiohttp.ClientSession) -> dict:
-    """POST /v1/nodes/enroll once; the result lives in /state/node.json and is never requested again."""
+async def enroll(http: aiohttp.ClientSession, node_id: str | None = None) -> dict:
+    """POST /v1/nodes/enroll; the result lives in /state/node.json. Again only with a new join code after the
+    coordinator refused this node (4001 / 401), keeping its node_id so the coordinator keeps the same record."""
     st = load(ENROLL_STATE) or {}
     if st.get("code") != JOIN_CODE:
         st = {"code": JOIN_CODE, "request_id": secrets.token_hex(16)}
-        save(ENROLL_STATE, st)
+    node_id = node_id or st.get("node_id") or (load(STATE) or {}).get("node_id")
+    if node_id:
+        st["node_id"] = node_id
+    save(ENROLL_STATE, st)
     body = {"code": JOIN_CODE, "request_id": st["request_id"], "name": NODE_NAME, "connector_version": VERSION}
-    if st.get("node_id"):
-        body["node_id"] = st["node_id"]
+    if node_id:
+        body["node_id"] = node_id
     async with http.post(f"{COORDINATOR_URL}/v1/nodes/enroll", json=body, ssl=ssl_context()) as r:
         if r.status == 200:
             d = await r.json()
-            save(STATE, {"node_id": d["node_id"], "node_token": d["node_token"], "enrolled": time.time()})
+            save(STATE, {"node_id": d["node_id"], "node_token": d["node_token"], "enrolled": time.time(),
+                         "join_code_sha256": code_sha(JOIN_CODE)})
             try:
                 os.remove(ENROLL_STATE)
             except OSError:
@@ -432,13 +448,13 @@ async def session(http: aiohttp.ClientSession, state: dict) -> None:
     except InvalidStatus as exc:
         code, h = exc.response.status_code, exc.response.headers
         if code in (401, 426):
-            raise Retry(600, f"upgrade refused: {code}")
+            raise Retry(600, f"upgrade refused: {code}", unauthorized=code == 401)
         raise Retry(retry_after(h, 0), f"upgrade refused: {code}")
     except ConnectionClosed as exc:
         code = exc.rcvd.code if exc.rcvd else 1006
         reason = exc.rcvd.reason if exc.rcvd else "connection lost"
         if code in (4001, 4002, 4004):
-            raise Retry(600, f"closed {code}: {reason}")
+            raise Retry(600, f"closed {code}: {reason}", unauthorized=code == 4001)
         if code == 4003:
             raise Retry(30, f"closed 4003: replaced by another connection of this node")
         raise Retry(0, f"closed {code}: {reason}")
@@ -460,9 +476,17 @@ async def main_loop() -> None:
                     if not JOIN_CODE:
                         raise Retry(600, "not enrolled: set NODE_JOIN_CODE")
                     state = await enroll(http)
-                elif JOIN_CODE:
-                    log.info("already enrolled: NODE_JOIN_CODE is ignored and can be removed from .env")
-                await session(http, state)
+                elif JOIN_CODE and not fresh_code(state):
+                    log.info("already enrolled: NODE_JOIN_CODE is used up and can be removed from .env")
+                try:
+                    await session(http, state)
+                except Retry as r:
+                    if not (r.unauthorized and fresh_code(state)):
+                        raise
+                    # revoked or unknown token, and .env has a new join code: enroll again as the same node
+                    log.warning("%s; enrolling again with the new NODE_JOIN_CODE as node %s", r.reason, state.get("node_id"))
+                    await enroll(http, node_id=state.get("node_id"))
+                    continue
                 delay, reason = 0.0, "closed"
             except Retry as r:
                 delay, reason = r.delay, r.reason

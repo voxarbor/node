@@ -72,17 +72,21 @@ class Coord:
         self.order: list = []
         self.window_from_node: dict[int, int] = {}
         self.grant = True
+        self.revoked: set = set()
 
     async def enroll(self, r):
         d = await r.json()
         events["enroll"].append(d)
-        if d["code"] != "join-ok":
+        if d["code"] == "join-2":  # a second code after a revocation keeps the node's record when it sends node_id
+            return web.json_response({"node_id": d.get("node_id") or "n-new", "node_token": "tok-3"})
+        if d["code"] != "join-ok" or events["enroll"][:-1]:  # single-use
             return web.json_response({"detail": "bad code"}, status=401)
         return web.json_response({"node_id": "n-1", "node_token": "tok-1"})
 
     async def connect(self, r):
         events["auth"].append((r.headers.get("Authorization"), r.headers.get("X-Voice-Core-Protocol")))
-        if r.headers.get("Authorization") not in ("Bearer tok-1", "Bearer tok-2"):
+        if r.headers.get("Authorization") not in ("Bearer tok-1", "Bearer tok-2", "Bearer tok-3") \
+                or r.headers.get("Authorization") in self.revoked:
             return web.Response(status=401)
         ws = web.WebSocketResponse(max_msg_size=2 * 1024 * 1024)
         await ws.prepare(r)
@@ -250,6 +254,26 @@ async def main():
         assert events["auth"][-1] == ("Bearer tok-2", "1"), events["auth"]
         assert len(events["enroll"]) == 1, "enrolled again"
         print("caps_get, token rotation, reconnect with the new token, no re-enroll ok")
+
+        # revocation: 4001 with the used code in .env -> no new enrollment; restart with a new code -> enroll again
+        # as the same node (node_id from /state/node.json), then connect with the new token
+        assert "join_code_sha256" in json.load(open(f"{state}/node.json"))
+        co.revoked |= {"Bearer tok-1", "Bearer tok-2"}
+        co.connected.clear()
+        await co.ws.close(code=4001, message=b"revoked")
+        await asyncio.sleep(3)
+        assert len(events["enroll"]) == 1 and not co.connected.is_set(), events["enroll"]
+        proc.terminate()
+        proc.wait()
+        env["NODE_JOIN_CODE"] = "join-2"
+        proc = subprocess.Popen([sys.executable, "/app/app.py"], env=env)
+        await asyncio.wait_for(co.connected.wait(), 30)
+        e = events["enroll"][-1]
+        assert e["code"] == "join-2" and e.get("node_id") == "n-1", e
+        assert events["auth"][-1] == ("Bearer tok-3", "1"), events["auth"][-3:]
+        st = json.load(open(f"{state}/node.json"))
+        assert st["node_id"] == "n-1" and st["node_token"] == "tok-3", st
+        print("revocation: no re-enroll with the used code; new code -> same node_id, new token ok")
         print("ALL OK")
     finally:
         proc.terminate()

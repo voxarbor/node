@@ -44,7 +44,14 @@ and new (node dials the coordinator) setups run side by side.
      coordinator honours it only if that node belongs to the code's owner.
    - Errors: 401 bad or used code, 410 expired, 429 + `Retry-After` (attempt limit per code and per IP). When that file exists the connector never enrolls again and ignores
    `NODE_JOIN_CODE` (logging once that it can be removed from `.env`; the code is single-use anyway).
-3. From then on the node authenticates with `node_token`. Revoking it in the coordinator closes the node out (4001);
+3. Re-enrollment (since 0.10.3): `/state/node.json` also keeps `join_code_sha256` (the sha256 of the code it enrolled
+   with, never the code). Every enroll after the first sends the node's old `node_id` (from `/state/node.json`), so the
+   coordinator keeps the same record (rules, history) for a node of the same owner. When the coordinator refuses the
+   node (close 4001 or HTTP 401 at the upgrade, e.g. revoked) and `.env` holds a NODE_JOIN_CODE different from the one
+   it already used, the connector enrolls again by itself at once (with that `node_id`) and connects with the new
+   token; with the used code it just waits (10 min) as before. So after a revocation the admin only gives the node
+   a new join code (edit `.env`, `docker compose up -d`).
+4. From then on the node authenticates with `node_token`. Revoking it in the coordinator closes the node out (4001);
    re-enrolling takes a new join code. The coordinator can rotate it at any time (`rotate_token`, below).
 
 ## Connection
