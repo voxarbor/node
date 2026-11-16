@@ -295,11 +295,11 @@ def verbalize(text: str) -> str:
     return " ".join(out)
 
 
-def _prepare(t: str) -> str:
+def _prepare(t: str, use_lexicon: bool = True) -> str:
     from ukrainian_word_stress import StressSymbol
 
     t = t.strip().replace('"', "")
-    t = lexicon.apply(t)  # user stress lexicon (whole words, phrases, regex contexts) before automatic stress
+    t = lexicon.apply(t) if use_lexicon else t  # user stress lexicon (whole words, phrases, regex contexts) before automatic stress
     # "++" = stress plus the IPA length mark, which ipa_uk passes through and both engines' vocabularies know:
     # HolosTTS barely lengthens some stressed vowels in running speech (за́мок sounded like замок).
     t = t.replace("++", StressSymbol.CombiningAcuteAccent + LONG).replace("+", StressSymbol.CombiningAcuteAccent)
@@ -336,7 +336,7 @@ def _holos():
 
 
 def synthesize(text: str, voice: str | None, speed: float, model: str, pause_ms: int,
-               do_verbalize: bool, engine: str = "styletts2") -> tuple[bytes, dict]:
+               do_verbalize: bool, engine: str = "styletts2", use_lexicon: bool = True) -> tuple[bytes, dict]:
     """Returns (float32 mono PCM at 24 kHz as bytes, info)."""
     import numpy as np
     from ipa_uk import ipa
@@ -375,7 +375,7 @@ def synthesize(text: str, voice: str | None, speed: float, model: str, pause_ms:
         for part in split_to_parts(piece, group_chars=group):
             if not part.strip():
                 continue
-            stressed = _prepare(part)
+            stressed = _prepare(part, use_lexicon)
             ps = ipa(stressed)
             if not ps:
                 continue
@@ -418,7 +418,7 @@ def _before_pause(piece: str, tokens: list[str], n: int) -> str:
     return piece
 
 
-def prepare(text: str, do_verbalize: bool) -> dict:
+def prepare(text: str, do_verbalize: bool, use_lexicon: bool = True) -> dict:
     """Show what the model will read: verbalized text and the stressed sentence parts; explicit pauses are shown as
     "{пауза 0.8}" both in the text and as items of their own in "stressed"."""
     shown, stressed = [], []
@@ -435,7 +435,7 @@ def prepare(text: str, do_verbalize: bool) -> dict:
         if do_verbalize:
             piece = verbalize(piece)
         shown.append(piece.strip())
-        stressed += [_prepare(p) for p in split_to_parts(piece) if p.strip()]
+        stressed += [_prepare(p, use_lexicon) for p in split_to_parts(piece) if p.strip()]
     return {"text": " ".join(shown), "stressed": stressed}
 
 

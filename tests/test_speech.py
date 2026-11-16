@@ -169,3 +169,13 @@ assert f"за{A}мок і" in out and f"за{A}{L}мок," in out and f"во{A}�
 kind, pat, right = lexicon.parse_rule("замок => за++мок")  # a lexicon word rule skips a word already marked
 assert pat.sub(lambda m: lexicon._apply_marks(m.group(0), right), "за+мок і замок") == "за+мок і за++мок"
 print("user stress kept ok")
+
+# lexicon=false (0.10.6): no lexicon rule at all, so a word can be heard as the automatic stress says it
+lexicon.write_text("ЗСУ => Збро+йні си+ли\nGitHub => гі+тхаб\n")
+on, _ = speech.prepare_text("ЗСУ і GitHub.")
+off, _ = speech.prepare_text("ЗСУ і GitHub.", use_lexicon=False)
+assert "Збро+йні си+ли" in on and "гі+тхаб" in on, on
+assert "Збро+йні" not in off and "гі+тхаб" not in off, off
+segs, _ = speech.plan("ЗСУ і GitHub.", use_lexicon=False)
+assert "Збро+йні" not in segs[0]["spoken"], segs
+print("lexicon off ok")

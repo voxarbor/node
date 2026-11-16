@@ -30,6 +30,7 @@ import worker
 API_KEY = os.environ["API_KEY"]
 IDLE_TTL = int(os.environ.get("IDLE_TTL", "600"))
 ENABLE_UI = os.environ.get("ENABLE_UI", "true").lower() == "true"
+FEATURES = ["lexicon_off"]  # optional request features a coordinator can rely on (in /capabilities)
 MAX_CHARS = int(os.environ.get("TTS_MAX_CHARS", "5000"))  # one-shot /v1/audio/speech
 LONG_MAX_CHARS = int(os.environ.get("TTS_LONG_MAX_CHARS", "300000"))  # stream and jobs
 FORMATS = {"wav": "audio/wav", "mp3": "audio/mpeg", "opus": "audio/ogg", "flac": "audio/flac"}
@@ -115,6 +116,8 @@ class SpeechRequest(BaseModel):
     speed: float = Field(1.0, ge=0.5, le=2.0)
     model: str = Field("multi", description="styletts2 only: 'multi' (31 voices) or 'single' (one male voice)")
     verbalize: bool = Field(False, description="Spell out numbers/abbreviations first (seq2seq model)")
+    lexicon: bool = Field(True, description="false: read without any lexicon rule (stress, name, replace, regex), "
+                                            "e.g. to hear a word as the automatic stress says it")
     pause_ms: int = Field(0, ge=0, le=3000, description="Silence inserted between sentences")
     response_format: str = Field("wav", description="wav (24-bit) | flac (24-bit) | mp3 (320k, 48 kHz) | opus")
     sample_rate: int | None = Field(None, description="Resample output (native 24000; soxr)")
@@ -216,7 +219,7 @@ async def _synth_one(spoken: str, p: dict, request: Request | None = None):
     while True:
         try:
             return await run(worker.synthesize, spoken, p["voice"], p["speed"], p["model"], p["pause_ms"],
-                             p["verbalize"], p["engine"], request=request)
+                             p["verbalize"], p["engine"], p.get("lexicon", True), request=request)
         except HTTPException as exc:
             if exc.status_code != 429:
                 raise
@@ -228,13 +231,15 @@ def _params(req: SpeechRequest, engine: str, model: str, voice: str | None) -> d
             "verbalize": req.verbalize, "english": req.english, "clean": req.clean,
             "response_format": req.response_format, "brackets": req.brackets,
             "brackets_announce": req.brackets_announce or req.brackets == "announce", "initials": req.initials,
-            "brackets_voice": _aside_voice(req, engine, voice), "brackets_gain_db": req.brackets_gain_db}
+            "brackets_voice": _aside_voice(req, engine, voice), "brackets_gain_db": req.brackets_gain_db,
+            "lexicon": req.lexicon}
 
 
 async def _plan(text: str, req: SpeechRequest) -> list[dict]:
     segs, _ = await asyncio.to_thread(speechtext.plan, text, clean_text=req.clean, use_english=req.english,
                                       pause_ms=req.pause_ms, brackets=req.brackets,
-                                      announce=req.brackets_announce, initials_mode=req.initials)
+                                      announce=req.brackets_announce, initials_mode=req.initials,
+                                      use_lexicon=req.lexicon)
     if not segs:
         raise HTTPException(422, "nothing to read after cleanup")
     return segs
@@ -244,7 +249,8 @@ async def _plan(text: str, req: SpeechRequest) -> list[dict]:
 async def health() -> dict:
     loading = _warming is not None and not _warming.done()  # models are being loaded by /v1/warmup
     return {"status": "ok", "loaded": _pool is not None and not loading, "loading": loading, "idle_ttl": IDLE_TTL,
-            "ui": ENABLE_UI, "jobs": JOBS.counts(), "busy": _busy, "queue_max": QUEUE_MAX, "device": _device()}
+            "ui": ENABLE_UI, "jobs": JOBS.counts(), "busy": _busy, "queue_max": QUEUE_MAX, "device": _device(),
+            "features": FEATURES}
 
 
 def _device() -> str:
@@ -457,13 +463,14 @@ async def speech(req: SpeechRequest, request: Request) -> Response:
     text, engine, model, voice = _validate(req)
     text, _ = await asyncio.to_thread(speechtext.prepare_text, text, clean_text=req.clean, use_english=req.english,
                                       brackets=req.brackets, announce=req.brackets_announce,
-                                      initials_mode=req.initials)
+                                      initials_mode=req.initials, use_lexicon=req.lexicon)
 
     async def speak(speed: float) -> bytes:
         if speechtext.ASIDE_START in text:
             pcm, _ = await _synth(text, dict(_params(req, engine, model, voice), speed=speed), request)
         else:
             pcm, _ = await run(worker.synthesize, text, voice, speed, model, req.pause_ms, req.verbalize, engine,
+                               req.lexicon,
                                request=request)
         return pcm
 
@@ -734,6 +741,7 @@ async def remove_lexicon_rule(req: LexiconRule) -> dict:
 
 class TextRequest(BaseModel):
     text: str
+    lexicon: bool = True  # false: no lexicon rule at all
     verbalize: bool = True
     english: bool = True
     clean: bool = True
@@ -754,9 +762,9 @@ async def prepare(req: TextRequest) -> dict:
     text, names = await asyncio.to_thread(speechtext.prepare_text, req.text[:MAX_CHARS], clean_text=req.clean,
                                           use_english=req.english, brackets=mode, announce=req.brackets_announce,
                                           initials_mode=req.initials if req.initials in speechtext.INITIALS_MODES
-                                          else "letters")
+                                          else "letters", use_lexicon=req.lexicon)
     out = await run(worker.prepare, text.replace(speechtext.ASIDE_START, "").replace(speechtext.ASIDE_END, ""),
-                    req.verbalize)
+                    req.verbalize, req.lexicon)
     return {**out, "names": [{"word": w, "uk": u} for w, u in names.items()]}
 
 

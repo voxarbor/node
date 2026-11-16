@@ -46,6 +46,13 @@ Errors: `{"detail": "..."}` with 4xx/5xx; `429` = the model worker is busy (retr
   `Т. Г. Шевченко => Тарас Григорович Шевченко` / `т. зв. => так званий` (replace: any other text, `+` optional;
   "Т.Г." matches "Т. Г." too).
 
+## Without the lexicon (since 0.10.6)
+
+`"lexicon": false` in `/v1/audio/speech`, `/v1/audio/speech/stream`, `/v1/jobs` and `/v1/text/prepare` (default
+`true`) reads the text without any lexicon rule (stress, name, replace, regex): the automatic stress and the
+automatic English names decide, as if the lexicon were empty. A manual `+` / `++` in the text still counts. The TTS
+keeps no audio cache, so nothing mixes. `/health` and `/capabilities` (`services.tts.features`) list `lexicon_off`.
+
 ## Text markup (since 0.10.1)
 
 What the text may contain besides plain words; `GET /v1/voices` -> `engines.<engine>.markup` and `/capabilities` ->

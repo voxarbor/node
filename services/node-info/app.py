@@ -106,6 +106,7 @@ def capabilities() -> dict:
                      busy=h.get("busy"), queue_max=h.get("queue_max"))
             s["device"] = DEVICES.get(name) or h.get("device") or "cpu"  # stt: speaches says nothing, so env
             if name == "tts":
+                s["features"] = h.get("features", [])
                 s.update(jobs=h.get("jobs"), **{k: v for k, v in st.get("tts", {}).items()})
                 try:  # lets a coordinator check cheaply that this node's stress lexicon matches its source
                     lex = get(f"{url}/v1/lexicon", timeout=5)["text"]

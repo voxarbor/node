@@ -85,8 +85,10 @@ def initials(text: str, mode: str = "letters") -> str:
     return re.sub(r"[ \t]{2,}", " ", text)
 
 
-def replace_rules(text: str) -> str:
+def replace_rules(text: str, use_lexicon: bool = True) -> str:
     """Lexicon replace rules ("Т. Г. Шевченко => Тарас Григорович Шевченко", "т. зв. => так званий")."""
+    if not use_lexicon:  # lexicon=false: the text as written, no rule at all
+        return text
     for kind, pattern, right in lexicon.rules():
         if kind == "replace":
             text = pattern.sub(lambda m: right, text)
@@ -109,10 +111,11 @@ def say_name(word: str, lang: str = "en-us") -> str | None:
     return phonemize.name(word, lang)
 
 
-def english(text: str, lang: str = "en-us", cache: dict | None = None) -> tuple[str, dict[str, str]]:
+def english(text: str, lang: str = "en-us", cache: dict | None = None,
+            use_lexicon: bool = True) -> tuple[str, dict[str, str]]:
     """Latin words -> how the Ukrainian voice should say them. Returns (text, {word: spelling})."""
     used: dict[str, str] = {}
-    for pattern, right in _name_rules():  # multi-word names ("Visual Studio Code") before single tokens
+    for pattern, right in (_name_rules() if use_lexicon else []):  # multi-word names before single tokens
         text = pattern.sub(lambda m: used.setdefault(m.group(0), right), text)
     cache = {} if cache is None else cache
 
@@ -267,7 +270,7 @@ def _sentences(para: str) -> list[str]:
 
 def plan(text: str, *, clean_text: bool = True, use_english: bool = True, pause_ms: int = 150,
          lang: str = "en-us", brackets: str = "aside", announce: bool = False,
-         initials_mode: str = "letters") -> tuple[list[dict], dict[str, str]]:
+         initials_mode: str = "letters", use_lexicon: bool = True) -> tuple[list[dict], dict[str, str]]:
     """-> (segments [{text, spoken, pause_after_ms}], names {latin word: spelling})."""
     text = normalize(text)
     if clean_text:
@@ -309,9 +312,9 @@ def plan(text: str, *, clean_text: bool = True, use_english: bool = True, pause_
         if s.pop("_cut", False) and s["text"][-1] not in ".?!:;,…-—":
             s["_comma"] = True  # cut by a pause mid-sentence: read as unfinished, captions unchanged
     for s in segs:
-        spoken = initials(replace_rules(s["text"]), initials_mode)
+        spoken = initials(replace_rules(s["text"], use_lexicon), initials_mode)
         if use_english:
-            s["spoken"], used = english(spoken, lang, cache)
+            s["spoken"], used = english(spoken, lang, cache, use_lexicon)
             names.update(used)
         else:
             s["spoken"] = spoken
@@ -323,15 +326,15 @@ def plan(text: str, *, clean_text: bool = True, use_english: bool = True, pause_
 
 def prepare_text(text: str, *, clean_text: bool = True, use_english: bool = True,
                  brackets: str = "aside", announce: bool = False,
-                 initials_mode: str = "letters") -> tuple[str, dict[str, str]]:
+                 initials_mode: str = "letters", use_lexicon: bool = True) -> tuple[str, dict[str, str]]:
     """Whole text through cleanup + English names, hard-wrapped lines joined, paragraphs kept (one-shot
     /v1/audio/speech and /v1/text/prepare; the worker would otherwise end a sentence at every line break)."""
     text = normalize(text)
     if clean_text:
         text = clean(text)
-    text = "\n\n".join(speakable(initials(replace_rules(p), initials_mode), brackets, announce)
+    text = "\n\n".join(speakable(initials(replace_rules(p, use_lexicon), initials_mode), brackets, announce)
                          for p in _paragraphs(text))
-    return english(text) if use_english else (text, {})
+    return english(text, use_lexicon=use_lexicon) if use_english else (text, {})
 
 
 def time_stretch(pcm: bytes, factor: float) -> bytes:
