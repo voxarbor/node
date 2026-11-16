@@ -81,7 +81,9 @@ class Coord:
             return web.json_response({"node_id": d.get("node_id") or "n-new", "node_token": "tok-3"})
         if d["code"] != "join-ok" or events["enroll"][:-1]:  # single-use
             return web.json_response({"detail": "bad code"}, status=401)
-        return web.json_response({"node_id": "n-1", "node_token": "tok-1"})
+        import gzip  # replies gzip-compressed, as a CDN in front of the coordinator does
+        return web.Response(body=gzip.compress(json.dumps({"node_id": "n-1", "node_token": "tok-1"}).encode()),
+                            headers={"Content-Encoding": "gzip", "Content-Type": "application/json"})
 
     async def connect(self, r):
         events["auth"].append((r.headers.get("Authorization"), r.headers.get("X-Voice-Core-Protocol")))

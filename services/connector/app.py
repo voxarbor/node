@@ -467,7 +467,9 @@ async def main_loop() -> None:
         log.info("COORDINATOR_URL not set: idle")
         return
     backoff = 1.0
-    async with aiohttp.ClientSession(auto_decompress=False) as http:
+    # two clients: the tunnel passes the local gateway's bytes through untouched (auto_decompress=False); the
+    # coordinator's own HTTP replies (enroll) are ordinary HTTP and may come compressed (a CDN gzips JSON)
+    async with aiohttp.ClientSession(auto_decompress=False) as http, aiohttp.ClientSession() as coord:
         while True:
             started = time.monotonic()
             try:
@@ -475,7 +477,7 @@ async def main_loop() -> None:
                 if state is None:
                     if not JOIN_CODE:
                         raise Retry(600, "not enrolled: set NODE_JOIN_CODE")
-                    state = await enroll(http)
+                    state = await enroll(coord)
                 elif JOIN_CODE and not fresh_code(state):
                     log.info("already enrolled: NODE_JOIN_CODE is used up and can be removed from .env")
                 try:
@@ -485,7 +487,7 @@ async def main_loop() -> None:
                         raise
                     # revoked or unknown token, and .env has a new join code: enroll again as the same node
                     log.warning("%s; enrolling again with the new NODE_JOIN_CODE as node %s", r.reason, state.get("node_id"))
-                    await enroll(http, node_id=state.get("node_id"))
+                    await enroll(coord, node_id=state.get("node_id"))
                     continue
                 delay, reason = 0.0, "closed"
             except Retry as r:
