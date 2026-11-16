@@ -14,8 +14,10 @@ THREADS = int(os.environ.get("DIARIZE_THREADS", "4"))
 THRESHOLD = float(os.environ.get("DIARIZE_THRESHOLD", "0.5"))
 FEMALE_HZ, MALE_HZ = 165.0, 150.0  # pitch fallback: median F0 above / below -> female / male
 MERGE_SIM = float(os.environ.get("DIARIZE_MERGE_SIM", "0.88"))  # same-gender clusters this similar = one person
-# Gender from the speaker embedding (timbre), not pitch: logistic regression trained on our 57 TTS voices
-# (bench/diarize_gender_train.py). Pitch failed on an energetic male let's-player (median 170-210 Hz).
+# Gender from the speaker embedding (timbre), not pitch: logistic regression on WeSpeaker embeddings of real voices
+# (tools/gender_train_real.py, since 0.12.1: Common Voice 19 uk/en/ru/pl + LibriSpeech, 1850 speakers, Platt-
+# calibrated: held-out speakers 94.7 %, ECE 0.022; our videos 7/7 speakers incl. men at f0 ~210-230 Hz). Pitch alone
+# fails on energetic male let's-players.
 _GENDER = np.load(os.path.join(os.path.dirname(os.path.abspath(__file__)), "gender_lr.npz"))
 _diar: dict = {}
 _emb = None

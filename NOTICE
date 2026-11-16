@@ -39,8 +39,9 @@ Speaker diarization
 - sherpa-onnx (k2-fsa) - Apache-2.0
 - pyannote/segmentation-3.0 (CNRS) - MIT
 - WeSpeaker ResNet34 VoxCeleb (Wespeaker/wespeaker-voxceleb-resnet34-LM) - CC-BY-4.0
-- services/diarize/gender_lr.npz: a small classifier trained on the speaker embeddings of HolosTTS/StyleTTS2
-  preset voices (tools/diarize_gender_train.py)
+- services/diarize/gender_lr.npz: a small classifier on WeSpeaker speaker embeddings, trained
+  (tools/gender_train_real.py) on Mozilla Common Voice 19 (CC0-1.0; uk, en, ru, pl) and LibriSpeech dev/test-clean
+  (Panayotov et al., CC-BY-4.0); no audio is shipped, only the 256 weights
 
 Gateway, connector, API
 - Caddy - Apache-2.0
