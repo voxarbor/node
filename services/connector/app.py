@@ -440,6 +440,7 @@ async def session(http: aiohttp.ClientSession, state: dict) -> None:
                 raise Retry(30, "no welcome from the coordinator")
             link.heartbeat = min(60, max(5, float(welcome.get("heartbeat_s", 10))))
             link.max_streams = min(MAX_STREAMS, int(welcome.get("max_streams", MAX_STREAMS)))
+            status["welcomed"] = True  # the main loop resets its backoff: a short session is not a failed connect
             status.update(connected=True, coordinator=COORDINATOR_URL, node_id=welcome.get("node_id"),
                           since=time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()), last_error=None)
             log.info("connected to %s as node %s", COORDINATOR_URL, welcome.get("node_id"))
@@ -494,8 +495,8 @@ async def main_loop() -> None:
                 delay, reason = r.delay, r.reason
             except (OSError, asyncio.TimeoutError, aiohttp.ClientError, websockets.exceptions.WebSocketException) as exc:
                 delay, reason = 0.0, f"{type(exc).__name__}: {exc}"[:200]
-            if time.monotonic() - started > 60:
-                backoff = 1.0
+            if status.pop("welcomed", False) or time.monotonic() - started > 60:
+                backoff = 1.0  # the coordinator accepted us: reconnect quickly after a dropped link
             wait = delay or backoff
             backoff = min(60.0, backoff * 2)
             wait *= random.uniform(0.8, 1.2)

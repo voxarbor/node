@@ -257,6 +257,16 @@ async def main():
         assert len(events["enroll"]) == 1, "enrolled again"
         print("caps_get, token rotation, reconnect with the new token, no re-enroll ok")
 
+        # dropped links (a proxy cuts the WebSocket, 1006) after short sessions: every reconnect stays fast
+        for _ in range(5):
+            await asyncio.wait_for(co.connected.wait(), 30)
+            co.connected.clear()
+            t0 = time.monotonic()
+            co.ws._req.transport.abort() if getattr(co.ws, "_req", None) else await co.ws.close(code=1011)
+            await asyncio.wait_for(co.connected.wait(), 6)
+            assert time.monotonic() - t0 < 6
+        print("5 dropped short sessions, each reconnect < 6 s ok")
+
         # revocation: 4001 with the used code in .env -> no new enrollment; restart with a new code -> enroll again
         # as the same node (node_id from /state/node.json), then connect with the new token
         assert "join_code_sha256" in json.load(open(f"{state}/node.json"))
