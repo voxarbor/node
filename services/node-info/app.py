@@ -138,7 +138,8 @@ def capabilities() -> dict:
                          last_bot_check=h.get("last_bot_check"), last_ok=h.get("last_ok"),
                          endpoints=["/v1/info", "/v1/subs", "/v1/audio"])
             elif name == "diarize":
-                s.update(model="pyannote segmentation-3.0 + wespeaker_en_voxceleb_resnet34_LM (sherpa-onnx)",
+                s.update(engine=h.get("engine", "sherpa-onnx"),
+                         model=h.get("model") or "pyannote segmentation-3.0 + wespeaker_en_voxceleb_resnet34_LM (sherpa-onnx)",
                          sessions=h.get("sessions"), endpoints=["/v1/diarize"])
             _last[name] = (time.time(), dict(s))
         except Exception as exc:
@@ -152,7 +153,8 @@ def capabilities() -> dict:
         services[name] = s
     node = host()
     node["gpu_used"] = any(s.get("device") == "cuda" for s in services.values())
-    return {"schema": 1, "voice_core_version": VERSION, "local_ai_version": VERSION,
+    return {"schema": 1, "product": "voxarbor-node", "product_version": VERSION,
+            "voice_core_version": VERSION, "local_ai_version": VERSION,
             "voice_core_tag": TAG or None, "voice_core_release": RELEASE, "generated_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
             "node": node, "services": services,
             "gateway_paths": {k: f"/{k}/" for k in SERVICES}}

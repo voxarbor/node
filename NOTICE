@@ -1,4 +1,4 @@
-VoxArbor UA node (voice-core)
+VoxArbor Node
 Copyright 2026 the VoxArbor UA authors
 
 The code in this repository is licensed under the Apache License 2.0 (see LICENSE). The services download or
@@ -34,6 +34,8 @@ Translation and punctuation
 - py3langid - BSD-3-Clause; CTranslate2 - MIT; sentencepiece - Apache-2.0; ONNX Runtime - MIT
 
 Speaker diarization
+- pyannote speaker-diarization-community-1 (pyannoteAI / CNRS; segmentation, WeSpeaker embedding, VBx PLDA) -
+  CC-BY-4.0, in the GPU image node-diarize-cuda; pyannote.audio - MIT
 - sherpa-onnx (k2-fsa) - Apache-2.0
 - pyannote/segmentation-3.0 (CNRS) - MIT
 - WeSpeaker ResNet34 VoxCeleb (Wespeaker/wespeaker-voxceleb-resnet34-LM) - CC-BY-4.0

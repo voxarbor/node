@@ -41,7 +41,7 @@ GONE = re.compile(r"Video unavailable|Private video|This video is (?:private|una
                   r"Sign in to confirm your age|age-restricted|Premieres in|This live event will begin|"
                   r"not available in your country|blocked it in your country", re.I)
 
-app = FastAPI(title="voice-core fetch", docs_url=None, redoc_url=None)
+app = FastAPI(title="VoxArbor Node fetch", docs_url=None, redoc_url=None)
 _bearer = HTTPBearer(auto_error=False)
 _busy = 0
 _state = {"last_bot_check": None, "last_ok": None}

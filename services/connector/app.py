@@ -1,4 +1,4 @@
-"""voice-core connector: the node dials out to a coordinator and serves its requests (docs/connect.md, protocol 1).
+"""VoxArbor Node connector: the node dials out to a coordinator and serves its requests (docs/connect.md, protocol 1).
 
 One WebSocket to COORDINATOR_URL; the coordinator's requests (the gateway contract: /stt /tts /translate /diarize
 /fetch /capabilities) are multiplexed on it by stream id and executed against the local gateway. Without
@@ -38,6 +38,7 @@ STATE = os.path.join(STATE_DIR, "node.json")
 ENROLL_STATE = os.path.join(STATE_DIR, "enroll.json")
 
 PROTOCOL = 1
+UA = f"voxarbor-node-connector/{VERSION}"
 MAX_FRAME = 256 * 1024             # largest binary payload the protocol allows (what we accept)
 CHUNK = 64 * 1024                  # what we send: smaller frames let pongs and close frames through sooner
 UNSENT_LOWAT = 64 * 1024           # TCP_NOTSENT_LOWAT: at most this much unsent data sits in the kernel, so the
@@ -442,7 +443,8 @@ class Link:
 # ---------------------------------------------------------------- main loop --------------------------------------
 async def session(http: aiohttp.ClientSession, state: dict) -> None:
     url = ws_url(COORDINATOR_URL)
-    headers = {"Authorization": f"Bearer {state['node_token']}", "X-Voice-Core-Protocol": str(PROTOCOL)}
+    headers = {"Authorization": f"Bearer {state['node_token']}", "X-Voice-Core-Protocol": str(PROTOCOL),
+               "User-Agent": UA}
     try:
         ws_ctx = connect(url, additional_headers=headers, ssl=ssl_context() if url.startswith("wss") else None,
                          max_size=TEXT_MAX + 64, ping_interval=None, open_timeout=20, close_timeout=5)
@@ -506,7 +508,7 @@ async def main_loop() -> None:
     backoff = 1.0
     # two clients: the tunnel passes the local gateway's bytes through untouched (auto_decompress=False); the
     # coordinator's own HTTP replies (enroll) are ordinary HTTP and may come compressed (a CDN gzips JSON)
-    async with aiohttp.ClientSession(auto_decompress=False) as http, aiohttp.ClientSession() as coord:
+    async with aiohttp.ClientSession(auto_decompress=False) as http, aiohttp.ClientSession(headers={"User-Agent": UA}) as coord:
         while True:
             started = time.monotonic()
             try:

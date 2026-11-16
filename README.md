@@ -1,4 +1,4 @@
-# VoxArbor UA node (voice-core)
+# VoxArbor Node
 
 The worker node of [VoxArbor UA](https://github.com/voxarbor). Self-hosted voice services for Ukrainian, running on CPU: speech-to-text, text-to-speech, translation into
 Ukrainian, punctuation restoration and speaker diarization, behind one gateway port with one token. Runs on one PC or as many worker nodes

@@ -12,6 +12,18 @@ RUN mkdir -p /models/segmentation && cd /models \
     && echo "e9848563da86f263117134dfd7ad63c92355b37de492b55e325400c9d9c39012  embedding.onnx" | sha256sum -c
 RUN pip install --no-cache-dir --timeout 120 --retries 10 sherpa-onnx==2.0.1 soundfile==0.13.1 numpy==2.2.6 \
     fastapi==0.162.0 uvicorn==0.54.0 python-multipart==0.0.33
+# DIARIZE_VARIANT=cuda builds node-diarize-cuda: pyannote speaker-diarization-community-1 (CC-BY-4.0) on
+# CUDA 12.8 PyTorch; its weights are fetched at build time with the build secret hf_token (gated on HF, the license
+# allows redistribution with attribution, see NOTICE), so nodes need no token. The CPU image stays sherpa-onnx only.
+ARG DIARIZE_VARIANT=cpu
+ARG PYANNOTE_REVISION=3533c8cf8e369892e6b79ff1bf80f7b0286a54ee
+RUN if [ "$DIARIZE_VARIANT" = cuda ]; then \
+      pip install --no-cache-dir --timeout 300 --retries 10 --index-url https://download.pytorch.org/whl/cu128 \
+        torch==2.8.0 torchaudio==2.8.0 \
+      && pip install --no-cache-dir --timeout 300 --retries 10 pyannote.audio==4.0.7; fi
+RUN --mount=type=secret,id=hf_token,required=false if [ "$DIARIZE_VARIANT" = cuda ]; then \
+      HF_TOKEN=$(cat /run/secrets/hf_token) python -c "import os; from huggingface_hub import snapshot_download as d; d('pyannote/speaker-diarization-community-1', revision='$PYANNOTE_REVISION', local_dir='/models/community-1', token=os.environ['HF_TOKEN'])" \
+      && rm -rf /models/community-1/.cache /models/community-1/*.gif && ls /models/community-1; fi
 WORKDIR /app
 COPY app.py worker.py gender_lr.npz ./
 USER nobody

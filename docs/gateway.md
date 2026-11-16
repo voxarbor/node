@@ -1,6 +1,6 @@
-# voice-core gateway and node contract
+# VoxArbor Node: gateway and node contract
 
-A voice-core node runs the voice services (STT, TTS, translate + punctuation, diarize) behind one gateway port with
+A VoxArbor Node runs the voice services (STT, TTS, translate + punctuation, diarize) behind one gateway port with
 one token, so one PC or a coordinator spreading work over several PCs can use them through a single stable contract.
 
 ## Images (GHCR, public)
@@ -52,7 +52,7 @@ Nodes behind NAT can instead dial out to the coordinator over one WebSocket and 
 
 An NVIDIA node (driver for CUDA 12.8+, nvidia-container-toolkit; check `docker run --rm --gpus all ubuntu:24.04 nvidia-smi`)
 adds `compose.gpu.yaml` (best pinned in `.env`: `COMPOSE_FILE=compose.yaml:compose.gpu.yaml`): STT runs the upstream speaches CUDA image (`STT_GPU_IMAGE`, float16), TTS the
-`voice-core-tts-cuda` image with `TTS_DEVICE=cuda` and `queue_max` 16 (`TTS_GPU_QUEUE_MAX`); translate, diarize and fetch
+`node-tts-cuda` image with `TTS_DEVICE=cuda` and `queue_max` 16 (`TTS_GPU_QUEUE_MAX`); translate, diarize and fetch
 stay on the CPU. `/capabilities` then shows `services.stt.device` / `services.tts.device` = `cuda` (TTS reports what its
 worker really uses once it has loaded; it falls back to `cpu` if torch sees no GPU) and `node.gpu_name`, `vram_gb`,
 `vram_used_gb`, `gpu_util_pct`, `gpu_used`.
@@ -253,3 +253,12 @@ first). Real example from a test node (lists shortened with "..."; `local_ai_ver
   }
 }
 ```
+
+## Internal names (kept on purpose)
+
+The product is called VoxArbor Node (voxarbor-node) since 0.11.0; it was voice-core before. These internal names stay
+as they were, so existing nodes need no migration (renaming volumes would mean copying gigabytes of models and
+risking the connector's node token): the compose project `voice-core-worker`, the volumes (`connector-state`,
+`hf-cache`, `tts-cache`, …), the `.env` variables (`VOICE_CORE_TAG`, …), the `/capabilities` fields
+`voice_core_version` / `voice_core_tag` / `voice_core_release` (now also `product` and `product_version`) and the
+`X-Voice-Core-Protocol` header of docs/connect.md. Images are `ghcr.io/voxarbor/node-<service>`.

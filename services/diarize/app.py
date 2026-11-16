@@ -89,8 +89,14 @@ async def _run(fn, *args):
 
 @app.get("/health")
 async def health() -> dict:
+    try:  # the device the worker really uses (known once it started), else what was asked for
+        dev = open("/tmp/diarize-device").read().strip()
+    except OSError:
+        dev = os.environ.get("DIARIZE_DEVICE", "cpu") if worker.ENGINE == "pyannote" else "cpu"
     return {"status": "ok", "loaded": _pool is not None, "idle_ttl": IDLE_TTL, "sessions": len(_sessions),
-            "busy": _busy, "queue_max": QUEUE_MAX}
+            "busy": _busy, "queue_max": QUEUE_MAX, "engine": worker.ENGINE, "device": dev,
+            "model": ("pyannote/speaker-diarization-community-1 (pyannote.audio 4)" if worker.ENGINE == "pyannote"
+                      else "pyannote segmentation-3.0 + wespeaker_en_voxceleb_resnet34_LM (sherpa-onnx)")}
 
 
 async def _decode(upload: UploadFile) -> tuple[str, float]:

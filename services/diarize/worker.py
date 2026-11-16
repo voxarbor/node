@@ -19,10 +19,59 @@ MERGE_SIM = float(os.environ.get("DIARIZE_MERGE_SIM", "0.88"))  # same-gender cl
 _GENDER = np.load(os.path.join(os.path.dirname(os.path.abspath(__file__)), "gender_lr.npz"))
 _diar: dict = {}
 _emb = None
+# Engine: sherpa-onnx (CPU, fast) or pyannote community-1 (better speaker counting, exclusive turns; meant for a GPU,
+# image node-diarize-cuda). Speaker embeddings for gender and cross-window linking stay WeSpeaker either way,
+# so the response and sessions do not change.
+ENGINE = os.environ.get("DIARIZE_ENGINE", "sherpa-onnx")
+PYANNOTE_DIR = os.environ.get("DIARIZE_PYANNOTE_DIR", "/models/community-1")
+_pyannote = None
+
+
+def device() -> str:
+    if ENGINE != "pyannote":
+        return "cpu"
+    import torch
+
+    return "cuda" if os.environ.get("DIARIZE_DEVICE", "cpu") == "cuda" and torch.cuda.is_available() else "cpu"
+
+
+def _pyannote_pipeline():
+    global _pyannote
+    if _pyannote is None:
+        import torch
+        from pyannote.audio import Pipeline
+
+        torch.set_num_threads(THREADS)
+        _pyannote = Pipeline.from_pretrained(PYANNOTE_DIR)  # local weights: no token, no network
+        _pyannote.to(torch.device(device()))
+    return _pyannote
+
+
+def _pyannote_turns(audio, num_speakers: int, min_speakers: int, max_speakers: int) -> list:
+    import torch
+
+    kw = {}
+    if num_speakers:
+        kw["num_speakers"] = num_speakers
+    else:
+        if min_speakers:
+            kw["min_speakers"] = min_speakers
+        if max_speakers:
+            kw["max_speakers"] = max_speakers
+    out = _pyannote_pipeline()({"waveform": torch.from_numpy(audio)[None], "sample_rate": SR}, **kw)
+    ids: dict[str, int] = {}
+    return [(s.start, s.end, ids.setdefault(lab, len(ids)))
+            for s, _, lab in out.exclusive_speaker_diarization.itertracks(yield_label=True) if s.end - s.start > 0.05]
 
 
 def init() -> None:
     import sherpa_onnx  # noqa: F401  (loaded in the worker only)
+
+    try:
+        with open("/tmp/diarize-device", "w") as f:  # read by /health (the API process stays torch-free)
+            f.write(device())
+    except OSError:
+        pass
 
 
 def _diarizer(num_clusters: int, threshold: float):
@@ -134,14 +183,17 @@ def diarize(path: str, offset: float, duration: float | None, num_speakers: int,
         audio = audio.mean(1)
     if len(audio) < SR // 2:
         return {"turns": [], "speakers": {}, "audio_s": info.frames / SR}
-    thr = THRESHOLD if threshold is None else threshold
-    res = _diarizer(num_speakers or -1, thr).process(audio).sort_by_start_time()
-    turns = [(r.start, r.end, r.speaker) for r in res]
-    n = len({t[2] for t in turns})
-    if not num_speakers and ((max_speakers and n > max_speakers) or (min_speakers and 0 < n < min_speakers)):
-        k = max_speakers if max_speakers and n > max_speakers else min_speakers
-        res = _diarizer(k, thr).process(audio).sort_by_start_time()
+    if ENGINE == "pyannote":
+        turns = _pyannote_turns(audio, num_speakers, min_speakers, max_speakers)
+    else:
+        thr = THRESHOLD if threshold is None else threshold
+        res = _diarizer(num_speakers or -1, thr).process(audio).sort_by_start_time()
         turns = [(r.start, r.end, r.speaker) for r in res]
+        n = len({t[2] for t in turns})
+        if not num_speakers and ((max_speakers and n > max_speakers) or (min_speakers and 0 < n < min_speakers)):
+            k = max_speakers if max_speakers and n > max_speakers else min_speakers
+            res = _diarizer(k, thr).process(audio).sort_by_start_time()
+            turns = [(r.start, r.end, r.speaker) for r in res]
     speakers: dict[int, dict] = {}
     for s, e, sp in turns:
         d = speakers.setdefault(sp, {"total_s": 0.0, "chunks": []})
@@ -153,6 +205,7 @@ def diarize(path: str, offset: float, duration: float | None, num_speakers: int,
         d["embedding"] = _embedding(voice[: SR * 30])
         d["p_female"] = p_female(d["embedding"])
         d["total_s"] = round(d["total_s"], 2)
-    speakers, turns = _merge(speakers, turns)
+    if ENGINE != "pyannote":  # community-1 clusters well itself; merging could glue different hosts again
+        speakers, turns = _merge(speakers, turns)
     return {"turns": [(round(s + offset, 2), round(e + offset, 2), sp) for s, e, sp in turns],
             "speakers": speakers, "audio_s": info.frames / SR}

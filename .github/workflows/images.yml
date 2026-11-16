@@ -1,6 +1,6 @@
 # Worker-node images to GHCR (public): ghcr.io/voxarbor/node-<service>:<version> | sha-<short> | latest.
 # A push to main rebuilds only the services whose directory changed; "Run workflow" or a change of the root
-# VERSION (the voice-core release) rebuilds all, which then also carry the tag v<VERSION> (what nodes pin).
+# VERSION (the VoxArbor Node release) rebuilds all, which then also carry the tag v<VERSION> (what nodes pin).
 # Models are not part of these builds except the TTS weights already in its Dockerfile (see docs/worker.md).
 name: images
 on:
@@ -18,11 +18,12 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        include:  # image = what is pushed (voice-core-<image>); args = extra build args
+        include:  # image = what is pushed (node-<image>); args = extra build args
           - { service: tts, image: tts, args: "" }
           - { service: tts, image: tts-cuda, args: "TORCH_VARIANT=cu128" }   # GPU nodes (compose.gpu.yaml)
           - { service: translate, image: translate, args: "" }
           - { service: diarize, image: diarize, args: "" }
+          - { service: diarize, image: diarize-cuda, args: "DIARIZE_VARIANT=cuda" }   # GPU nodes: pyannote community-1
           - { service: node-info, image: node-info, args: "" }
           - { service: fetch, image: fetch, args: "" }
           - { service: connector, image: connector, args: "" }
@@ -62,11 +63,16 @@ jobs:
             ghcr.io/voxarbor/node-${{ matrix.image }}:sha-${{ steps.v.outputs.sha }}
             ghcr.io/voxarbor/node-${{ matrix.image }}:latest
             ghcr.io/voxarbor/node-${{ matrix.image }}:${{ steps.v.outputs.release }}
+          secrets: |
+            hf_token=${{ secrets.HF_TOKEN }}
           build-args: |
             VOICE_CORE_RELEASE=${{ steps.v.outputs.release }}
             ${{ matrix.args }}
           labels: |
             org.opencontainers.image.source=https://github.com/voxarbor/node
+            org.opencontainers.image.title=VoxArbor Node ${{ matrix.image }}
+            org.opencontainers.image.description=VoxArbor Node: self-hosted Ukrainian voice services (${{ matrix.image }})
+            org.opencontainers.image.licenses=Apache-2.0
             org.opencontainers.image.version=${{ steps.v.outputs.release }}
           cache-from: type=gha,scope=${{ matrix.image }}
           cache-to: type=gha,scope=${{ matrix.image }},mode=max

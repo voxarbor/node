@@ -1,6 +1,6 @@
 # Node connect: outbound link to a coordinator (protocol 1)
 
-Status: implemented in voice-core 0.10.0 (service `connector`, approved 2026-11-15). Enable on a node: set
+Status: implemented in VoxArbor Node (then voice-core) 0.10.0 (service `connector`, approved 2026-11-15). Enable on a node: set
 `COORDINATOR_URL` and `NODE_JOIN_CODE` (and optionally `NODE_NAME`) in `.env`, then `docker compose up -d`; check
 `docker compose exec connector python -c "import urllib.request;print(urllib.request.urlopen('http://127.0.0.1:8000/health').read().decode())"`
 or its log. Self-check: `tests/test_connect.py` (fake coordinator + fake gateway). Nothing in the existing gateway contract (`docs/gateway.md`) changes; this adds a
@@ -15,7 +15,7 @@ and new (node dials the coordinator) setups run side by side.
 
 ## Node side
 
-- New compose service `connector` (image `voice-core-connector`, ~60 MB, stdlib + `websockets` + `aiohttp`, 0.25 CPU /
+- New compose service `connector` (image `node-connector`, ~60 MB, stdlib + `websockets` + `aiohttp`, 0.25 CPU /
   128 MB). It runs on every node; without `COORDINATOR_URL` it idles.
 - Env: `COORDINATOR_URL` (`https://coord.example`, the WebSocket URL is derived), `NODE_JOIN_CODE` (first start only),
   optional `NODE_NAME`, `CONNECT_MAX_STREAMS` (default 16). `NODE_TOKEN` stays the local gateway token only.
@@ -139,6 +139,6 @@ coordinator serves both for a transition period.
 
 ## Rollout
 
-1. voice-core minor release: `connector` service + `COORDINATOR_URL`; nodes without it behave exactly as now.
+1. A minor release: `connector` service + `COORDINATOR_URL`; nodes without it behave exactly as now.
 2. The coordinator adds `/v1/nodes/enroll` and `/v1/nodes/connect`; a node may be reachable both ways meanwhile.
 3. When all nodes dial out, close the public gateway ports (bind to 127.0.0.1).
