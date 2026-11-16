@@ -82,7 +82,8 @@ Fields are only added within a schema version. `voice_core_version` is the relea
 `busy` = jobs submitted and not finished, `queue_max` = above it the service answers 429, `loaded` = models in RAM.
 `tts.lexicon_sha256` (sha256 of the lexicon file text, as `GET /tts/v1/lexicon` returns it) and `lexicon_rules`
 let a coordinator check that a node's stress lexicon matches its source; push a new one with `PUT /tts/v1/lexicon`.
-`services.tts.features` lists optional request features (`lexicon_off` since 0.10.6). TTS engines carry `markup` (what a phrase editor may offer as buttons, docs/API.md "Text markup", since 0.10.1). Every service has `device` (`cpu` | `cuda`) since 0.8.0. `fetch` (when enabled) adds `ytdlp_version`, `deno_version`, `last_bot_check`, `last_ok`; when it is off it shows
+A service whose /health is slow (over 3 s) keeps its last known state for up to 120 s, marked `stale: true` with
+`stale_s` (since 0.10.7), so a busy node is not reported as gone. `services.tts.features` lists optional request features (`lexicon_off` since 0.10.6). TTS engines carry `markup` (what a phrase editor may offer as buttons, docs/API.md "Text markup", since 0.10.1). Every service has `device` (`cpu` | `cuda`) since 0.8.0. `fetch` (when enabled) adds `ytdlp_version`, `deno_version`, `last_bot_check`, `last_ok`; when it is off it shows
 `available: false`.
 TTS gives every voice's `genders` (male | female | child) and display `labels`; `voices` order = priority (favorites
 first). Real example from a test node (lists shortened with "..."; `local_ai_version` is a deprecated alias of

@@ -12,6 +12,7 @@ import subprocess
 import json
 import re
 import time
+import uuid
 from urllib.parse import quote
 from concurrent.futures import ProcessPoolExecutor
 
@@ -69,7 +70,8 @@ async def run(fn, *args, request: Request | None = None):
             raise HTTPException(429, f"busy: {QUEUE_MAX} jobs queued, retry later")
         if _pool is None:
             _pool = ProcessPoolExecutor(1, mp_context=multiprocessing.get_context("spawn"), initializer=worker.init)
-        future = _pool.submit(fn, *args)
+        token = uuid.uuid4().hex
+        future = _pool.submit(worker.call, token, fn, *args)
         _busy += 1
     try:
         waiter = asyncio.wrap_future(future)
@@ -78,7 +80,10 @@ async def run(fn, *args, request: Request | None = None):
             if done:
                 break
             if await request.is_disconnected():
-                future.cancel()  # no effect once the worker has started it
+                if not future.cancel():  # already running in the worker: ask it to stop between sentence parts
+                    os.makedirs(worker.CANCEL_DIR, exist_ok=True)
+                    open(os.path.join(worker.CANCEL_DIR, token), "w").close()
+                waiter.add_done_callback(lambda f: f.cancelled() or f.exception())  # its Cancelled is expected
                 raise HTTPException(499, "client disconnected")
         return await waiter
     finally:

@@ -31,6 +31,8 @@ DEVICES = {k: os.environ.get(f"{k.upper()}_DEVICE", "") for k in SERVICES}  # se
 STT_MODEL = os.environ.get("STT_MODEL", "deepdml/faster-whisper-large-v3-turbo-ct2")
 STATIC_TTL = float(os.environ.get("STATIC_TTL", "60"))
 _cache: dict = {"at": 0.0, "static": None}
+_last: dict[str, tuple[float, dict]] = {}  # service -> (time, its last good entry)
+STALE_S = float(os.environ.get("STALE_S", "120"))  # a busy service answering /health slowly keeps its last state
 
 
 def get(url: str, auth: bool = True, timeout: float = 5):
@@ -138,8 +140,15 @@ def capabilities() -> dict:
             elif name == "diarize":
                 s.update(model="pyannote segmentation-3.0 + wespeaker_en_voxceleb_resnet34_LM (sherpa-onnx)",
                          sessions=h.get("sessions"), endpoints=["/v1/diarize"])
+            _last[name] = (time.time(), dict(s))
         except Exception as exc:
-            s.update(available=False, healthy=False, error=type(exc).__name__)
+            seen = _last.get(name)
+            slow = isinstance(exc, TimeoutError) or isinstance(getattr(exc, "reason", None), TimeoutError)
+            if seen and slow and time.time() - seen[0] < STALE_S:
+                # /health was slow (a busy worker), not gone: keep the last known state, marked as stale
+                s = dict(seen[1], stale=True, stale_s=round(time.time() - seen[0]), error=type(exc).__name__)
+            else:
+                s.update(available=False, healthy=False, error=type(exc).__name__)
         services[name] = s
     node = host()
     node["gpu_used"] = any(s.get("device") == "cuda" for s in services.values())

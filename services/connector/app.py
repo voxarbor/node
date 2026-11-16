@@ -176,6 +176,7 @@ class Link:
         self.out: dict[int, Stream] = {}                   # streams with frames still to send
         self.caps_hash = None
         self.caps_sent = 0.0
+        self.caps_task: asyncio.Task | None = None
 
     # ---- outgoing
     def send_json(self, obj: dict) -> None:
@@ -397,8 +398,9 @@ class Link:
                 if now - s.last > IDLE_S and s.task and not s.idle:
                     s.idle = True
                     s.task.cancel()
-            if int(now) % 5 == 0:
-                await self.send_caps()
+            if int(now) % 5 == 0 and (self.caps_task is None or self.caps_task.done()):
+                # its own task: a slow local /capabilities (up to 15 s) must not hold back the pings
+                self.caps_task = asyncio.create_task(self.send_caps())
 
     async def serve(self) -> None:
         tasks = [asyncio.create_task(c) for c in (self.reader(), self.writer(), self.ticker())]
@@ -448,14 +450,19 @@ async def session(http: aiohttp.ClientSession, state: dict) -> None:
             state.update(link.state)  # a rotated token
     except InvalidStatus as exc:
         code, h = exc.response.status_code, exc.response.headers
-        if code in (401, 426):
-            raise Retry(600, f"upgrade refused: {code}", unauthorized=code == 401)
+        if code == 401:
+            raise Retry(600, f"upgrade refused: {code}", unauthorized=True)
+        if code == 426:  # protocol version not accepted: retry slowly, the coordinator may be mid-upgrade
+            raise Retry(30, f"upgrade refused: {code}")
         raise Retry(retry_after(h, 0), f"upgrade refused: {code}")
     except ConnectionClosed as exc:
         code = exc.rcvd.code if exc.rcvd else 1006
         reason = exc.rcvd.reason if exc.rcvd else "connection lost"
-        if code in (4001, 4002, 4004):
-            raise Retry(600, f"closed {code}: {reason}", unauthorized=code == 4001)
+        if code == 4001:
+            raise Retry(600, f"closed {code}: {reason}", unauthorized=True)
+        if code == 4002:  # protocol not supported: slow retry (30 s), not 10 min (a late hello once got 4002)
+            raise Retry(30, f"closed {code}: {reason}")
+        # 4004 (disabled by the admin) and everything else: the normal 1-60 s backoff
         if code == 4003:
             raise Retry(30, f"closed 4003: replaced by another connection of this node")
         raise Retry(0, f"closed {code}: {reason}")

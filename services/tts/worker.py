@@ -127,6 +127,34 @@ def _cached_first(load):
         constants.HF_HUB_OFFLINE = False
 
 
+CANCEL_DIR = "/tmp/tts-cancel"  # the API process drops a file named after a call's token when its client is gone
+_call_token: str | None = None
+
+
+class Cancelled(Exception):
+    """The client of this call went away: stop instead of finishing work nobody will receive."""
+
+
+def call(token: str, fn, *args):
+    """Run fn(*args) in the worker as the call `token`; synthesize() checks cancelled() between sentence parts."""
+    global _call_token
+    _call_token = token
+    try:
+        if cancelled():
+            raise Cancelled(token)
+        return fn(*args)
+    finally:
+        _call_token = None
+        try:
+            os.remove(os.path.join(CANCEL_DIR, token))
+        except OSError:
+            pass
+
+
+def cancelled() -> bool:
+    return bool(_call_token) and os.path.exists(os.path.join(CANCEL_DIR, _call_token))
+
+
 DEVICE_FILE = "/tmp/tts-device"  # the device the worker really uses, read by /health (the API process stays torch-free)
 
 
@@ -373,6 +401,8 @@ def synthesize(text: str, voice: str | None, speed: float, model: str, pause_ms:
             piece = verbalize(piece)
         said.append(piece)
         for part in split_to_parts(piece, group_chars=group):
+            if cancelled():
+                raise Cancelled("client gone")
             if not part.strip():
                 continue
             stressed = _prepare(part, use_lexicon)

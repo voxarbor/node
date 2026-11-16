@@ -112,7 +112,9 @@ the receiver sends `window` frames as it consumes data. Body bytes sent past the
   are the gateway's (10-60 min per service).
 - Reconnect: exponential backoff 1 s, 2 s, 4 s … max 60 s, ±20 % jitter; the backoff resets after 60 s connected.
   Special cases (log + the connector's `/health` show the reason):
-  - 4001 / HTTP 401 at upgrade, 4002 / HTTP 426, 4004: wait 10 min;
+  - 4001 / HTTP 401 at upgrade: wait 10 min (or enroll again at once with a new join code, see Enrollment);
+  - 4002 / HTTP 426 (protocol not supported): wait 30 s (since 0.10.7; was 10 min);
+  - 4004 (disabled by the admin): the normal 1-60 s backoff (since 0.10.7; was 10 min);
   - 4003: wait at least 30 s (two nodes sharing a token must not keep kicking each other off);
   - HTTP 429 / 503 at upgrade and 4009: wait `Retry-After` if given, else the normal backoff.
 
