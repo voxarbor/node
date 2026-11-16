@@ -1,6 +1,6 @@
-FROM python:3.12.12-slim
-ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1
-RUN apt-get update && apt-get install -y --no-install-recommends ffmpeg curl bzip2 && rm -rf /var/lib/apt/lists/*
+ARG BASE_IMAGE=ghcr.io/voxarbor/node-base-av:1
+FROM ${BASE_IMAGE}
+RUN apt-get update && apt-get install -y --no-install-recommends curl bzip2 && rm -rf /var/lib/apt/lists/*  # ffmpeg: base
 # Models from the sherpa-onnx GitHub releases (no Hugging Face token): pyannote segmentation-3.0 (MIT) and the
 # WeSpeaker ResNet34 VoxCeleb speaker embedding (Apache-2.0); checksums pinned.
 RUN mkdir -p /models/segmentation && cd /models \
@@ -18,9 +18,7 @@ RUN pip install --no-cache-dir --timeout 120 --retries 10 sherpa-onnx==2.0.1 sou
 ARG DIARIZE_VARIANT=cpu
 ARG PYANNOTE_REVISION=3533c8cf8e369892e6b79ff1bf80f7b0286a54ee
 RUN if [ "$DIARIZE_VARIANT" = cuda ]; then \
-      pip install --no-cache-dir --timeout 300 --retries 10 --index-url https://download.pytorch.org/whl/cu128 \
-        torch==2.8.0 torchaudio==2.8.0 \
-      && pip install --no-cache-dir --timeout 300 --retries 10 pyannote.audio==4.0.7; fi
+      pip install --no-cache-dir --timeout 300 --retries 10 pyannote.audio==4.0.7; fi  # torch: node-base-torch cu128
 RUN --mount=type=secret,id=hf_token,required=false if [ "$DIARIZE_VARIANT" = cuda ]; then \
       HF_TOKEN=$(cat /run/secrets/hf_token) python -c "import os; from huggingface_hub import snapshot_download as d; d('pyannote/speaker-diarization-community-1', revision='$PYANNOTE_REVISION', local_dir='/models/community-1', token=os.environ['HF_TOKEN'])" \
       && rm -rf /models/community-1/.cache /models/community-1/*.gif && ls /models/community-1; fi

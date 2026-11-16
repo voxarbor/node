@@ -127,7 +127,7 @@ def capabilities() -> dict:
                                   "/v1/text/prepare", "/v1/text/phonemize", "/v1/warmup", "/v1/voices/encode",
                                   "/v1/voices/custom"]
             elif name == "translate":
-                s.update(opus_pairs=h.get("opus_pairs"), fallback_model=h.get("fallback_model"),
+                s.update(opus_pairs=h.get("opus_pairs"), opus_models_version=h.get("opus_models_version"), fallback_model=h.get("fallback_model"),
                          punctuation_model="1-800-BAD-CODE/xlm-roberta_punctuation_fullstop_truecase",
                          **st.get("translate", {}))
                 s["endpoints"] = ["/v1/translate", "/v1/punctuate", "/v1/languages"]

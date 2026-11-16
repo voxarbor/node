@@ -2,28 +2,54 @@
 # A push to main rebuilds only the services whose directory changed; "Run workflow" or a change of the root
 # VERSION (the VoxArbor Node release) rebuilds all, which then also carry the tag v<VERSION> (what nodes pin).
 # Models are not part of these builds except the TTS weights already in its Dockerfile (see docs/worker.md).
+# Base images (job "base") come first: node-base-av (python + ffmpeg) and node-base-torch:<torch>-<cpu|cu128>-<ver>
+# on top of it; tts and diarize build FROM them (BASE_IMAGE), so a node stores the ffmpeg and torch layers once.
+# Changing a base: bump services/base-*/VERSION and the BASE_IMAGE tags in the build matrix below.
 name: images
 on:
   push:
     branches: [main]
-    paths: ["services/tts/**", "services/translate/**", "services/diarize/**", "services/node-info/**", "services/fetch/**", "services/connector/**", "VERSION", ".github/workflows/images.yml"]
+    paths: ["services/base-av/**", "services/base-torch/**", "services/tts/**", "services/translate/**", "services/diarize/**", "services/node-info/**", "services/fetch/**", "services/connector/**", "VERSION", ".github/workflows/images.yml"]
   workflow_dispatch:
 permissions:
   contents: read
   packages: write
 concurrency: { group: images, cancel-in-progress: false }
 jobs:
+  base:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with: { fetch-depth: 2 }
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with: { registry: ghcr.io, username: "${{ github.actor }}", password: "${{ secrets.GITHUB_TOKEN }}" }
+      - name: build missing or changed base images
+        run: |
+          av=ghcr.io/voxarbor/node-base-av:$(cat services/base-av/VERSION)
+          tv=$(cat services/base-torch/VERSION)
+          changed() { [ "${{ github.event_name }}" = workflow_dispatch ] || git diff --name-only HEAD~1 HEAD 2>/dev/null | grep -q "^services/$1/" \
+                      || ! docker manifest inspect "$2" >/dev/null 2>&1; }
+          lbl="--label org.opencontainers.image.source=https://github.com/voxarbor/node"
+          if changed base-av "$av"; then
+            docker buildx build --push $lbl -t "$av" services/base-av; fi
+          for v in cpu cu128; do
+            t=ghcr.io/voxarbor/node-base-torch:2.8.0-$v-$tv
+            if changed base-torch "$t" || changed base-av "$av"; then
+              docker buildx build --push $lbl --build-arg BASE_AV="$av" --build-arg TORCH_VARIANT=$v -t "$t" services/base-torch; fi
+          done
   build:
+    needs: base
     runs-on: ubuntu-24.04
     strategy:
       fail-fast: false
       matrix:
         include:  # image = what is pushed (node-<image>); args = extra build args
-          - { service: tts, image: tts, args: "" }
-          - { service: tts, image: tts-cuda, args: "TORCH_VARIANT=cu128" }   # GPU nodes (compose.gpu.yaml)
+          - { service: tts, image: tts, args: "BASE_IMAGE=ghcr.io/voxarbor/node-base-torch:2.8.0-cpu-1" }
+          - { service: tts, image: tts-cuda, args: "BASE_IMAGE=ghcr.io/voxarbor/node-base-torch:2.8.0-cu128-1" }   # GPU nodes
           - { service: translate, image: translate, args: "" }
-          - { service: diarize, image: diarize, args: "" }
-          - { service: diarize, image: diarize-cuda, args: "DIARIZE_VARIANT=cuda" }   # GPU nodes: pyannote community-1
+          - { service: diarize, image: diarize, args: "BASE_IMAGE=ghcr.io/voxarbor/node-base-av:1" }
+          - { service: diarize, image: diarize-cuda, args: "BASE_IMAGE=ghcr.io/voxarbor/node-base-torch:2.8.0-cu128-1\nDIARIZE_VARIANT=cuda" }   # GPU: pyannote
           - { service: node-info, image: node-info, args: "" }
           - { service: fetch, image: fetch, args: "" }
           - { service: connector, image: connector, args: "" }
@@ -34,7 +60,7 @@ jobs:
         id: changed
         run: |
           if [ "${{ github.event_name }}" = workflow_dispatch ] || ! git rev-parse -q --verify HEAD~1 >/dev/null \
-             || git diff --name-only HEAD~1 HEAD | grep -qE '^(services/${{ matrix.service }}/|VERSION$|\.github/workflows/images\.yml)'; then
+             || git diff --name-only HEAD~1 HEAD | grep -qE '^(services/${{ matrix.service }}/|services/base-|VERSION$|\.github/workflows/images\.yml)'; then
             echo build=true >> "$GITHUB_OUTPUT"
           fi
       - name: version

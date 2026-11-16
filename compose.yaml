@@ -26,16 +26,16 @@ services:
 
   node-info:
     <<: *common
-    image: ${REGISTRY:-ghcr.io/voxarbor}/node-node-info:${VOICE_CORE_TAG:-v0.11.0}
+    image: ${REGISTRY:-ghcr.io/voxarbor}/node-node-info:${VOICE_CORE_TAG:-v0.12.0}
     environment:
       <<: *env
-      VOICE_CORE_VERSION: ${VOICE_CORE_TAG:-v0.11.0}
+      VOICE_CORE_VERSION: ${VOICE_CORE_TAG:-v0.12.0}
       STT_MODEL: ${STT_MODEL:-deepdml/faster-whisper-large-v3-turbo-ct2}
       STT_IMAGE: ghcr.io/speaches-ai/speaches:0.8.3-cpu
-      TTS_IMAGE: ${REGISTRY:-ghcr.io/voxarbor}/node-tts:${VOICE_CORE_TAG:-v0.11.0}
-      TRANSLATE_IMAGE: ${REGISTRY:-ghcr.io/voxarbor}/node-translate:${VOICE_CORE_TAG:-v0.11.0}
-      DIARIZE_IMAGE: ${REGISTRY:-ghcr.io/voxarbor}/node-diarize:${VOICE_CORE_TAG:-v0.11.0}
-      FETCH_IMAGE: ${REGISTRY:-ghcr.io/voxarbor}/node-fetch:${VOICE_CORE_TAG:-v0.11.0}
+      TTS_IMAGE: ${REGISTRY:-ghcr.io/voxarbor}/node-tts:${VOICE_CORE_TAG:-v0.12.0}
+      TRANSLATE_IMAGE: ${REGISTRY:-ghcr.io/voxarbor}/node-translate:${VOICE_CORE_TAG:-v0.12.0}
+      DIARIZE_IMAGE: ${REGISTRY:-ghcr.io/voxarbor}/node-diarize:${VOICE_CORE_TAG:-v0.12.0}
+      FETCH_IMAGE: ${REGISTRY:-ghcr.io/voxarbor}/node-fetch:${VOICE_CORE_TAG:-v0.12.0}
     deploy:
       resources:
         limits: { cpus: "0.5", memory: 128m }
@@ -62,7 +62,7 @@ services:
 
   tts:
     <<: *common
-    image: ${REGISTRY:-ghcr.io/voxarbor}/node-tts:${VOICE_CORE_TAG:-v0.11.0}
+    image: ${REGISTRY:-ghcr.io/voxarbor}/node-tts:${VOICE_CORE_TAG:-v0.12.0}
     environment:
       <<: *env
       ENABLE_UI: "false"   # compose.ui.yaml turns the web UI on
@@ -86,7 +86,7 @@ services:
 
   translate:
     <<: *common
-    image: ${REGISTRY:-ghcr.io/voxarbor}/node-translate:${VOICE_CORE_TAG:-v0.11.0}
+    image: ${REGISTRY:-ghcr.io/voxarbor}/node-translate:${VOICE_CORE_TAG:-v0.12.0}
     environment:
       <<: *env
       TRANSLATE_MODEL: nllb-600m
@@ -97,15 +97,13 @@ services:
       MALLOC_ARENA_MAX: "2"
     volumes:
       - translate-cache:/cache
-    depends_on:
-      init-opus: { condition: service_completed_successfully }
     deploy:
       resources:
         limits: { cpus: "${TRANSLATE_CPUS:-4}", memory: 4g }
 
   diarize:
     <<: *common
-    image: ${REGISTRY:-ghcr.io/voxarbor}/node-diarize:${VOICE_CORE_TAG:-v0.11.0}
+    image: ${REGISTRY:-ghcr.io/voxarbor}/node-diarize:${VOICE_CORE_TAG:-v0.12.0}
     environment:
       <<: *env
       IDLE_TTL: "600"
@@ -121,7 +119,7 @@ services:
   # outbound link to a coordinator (docs/connect.md): only active with COORDINATOR_URL, otherwise it idles
   connector:
     <<: *common
-    image: ${REGISTRY:-ghcr.io/voxarbor}/node-connector:${VOICE_CORE_TAG:-v0.11.0}
+    image: ${REGISTRY:-ghcr.io/voxarbor}/node-connector:${VOICE_CORE_TAG:-v0.12.0}
     environment:
       <<: *env
       COORDINATOR_URL: ${COORDINATOR_URL:-}
@@ -139,7 +137,7 @@ services:
   fetch:
     <<: *common
     profiles: ["fetch"]
-    image: ${REGISTRY:-ghcr.io/voxarbor}/node-fetch:${VOICE_CORE_TAG:-v0.11.0}
+    image: ${REGISTRY:-ghcr.io/voxarbor}/node-fetch:${VOICE_CORE_TAG:-v0.12.0}
     environment:
       <<: *env
       QUEUE_MAX: ${FETCH_QUEUE_MAX:-4}
@@ -152,15 +150,24 @@ services:
       resources:
         limits: { cpus: "${FETCH_CPUS:-1}", memory: 1g }
 
-  # one-shot model setup (idempotent): Opus-MT models into the translate cache, Whisper model into STT
+  # One-off: copies the Opus-MT models into the translate volume, only on install or when OPUS_MODELS_TAG changes:
+  #   docker compose --profile init run --rm init-opus     (the installer / update.sh decide: docs/gateway.md)
+  # The volume remembers the copied version in opus-mt/.models-version (translate /health: opus_models_version);
+  # the image itself is then not needed on the node (prune.sh removes it).
   init-opus:
+    profiles: ["init"]
     image: ${REGISTRY:-ghcr.io/voxarbor}/node-models-opus:${OPUS_MODELS_TAG:-1}
+    environment:
+      OPUS_MODELS_TAG: ${OPUS_MODELS_TAG:-1}
+    command: ["sh", "-c", "v=$$(cat /cache/opus-mt/.models-version 2>/dev/null); if [ \"$$v\" = \"$$OPUS_MODELS_TAG\" ]; then echo \"opus models $$v present\"; else mkdir -p /cache/opus-mt && cp -r /models/opus-mt/. /cache/opus-mt/ && touch /cache/opus-mt/.complete && echo \"$$OPUS_MODELS_TAG\" > /cache/opus-mt/.models-version && chown -R 65534:65534 /cache/opus-mt && echo \"opus models $$OPUS_MODELS_TAG installed\"; fi"]
     volumes:
       - translate-cache:/cache
     restart: "no"
 
+  # one-shot: the Whisper model into STT (idempotent)
+
   init-stt:
-    image: ${REGISTRY:-ghcr.io/voxarbor}/node-node-info:${VOICE_CORE_TAG:-v0.11.0}
+    image: ${REGISTRY:-ghcr.io/voxarbor}/node-node-info:${VOICE_CORE_TAG:-v0.12.0}
     command: ["python", "init_models.py"]
     environment:
       <<: *env

@@ -254,6 +254,23 @@ first). Real example from a test node (lists shortened with "..."; `local_ai_ver
 }
 ```
 
+## Install, update, prune (since 0.12.0)
+
+- The Opus-MT models are copied into the translate volume by the one-off `init-opus` (compose profile `init`; the
+  image node-models-opus is ~3.7 GB and is not needed afterwards). The volume keeps the copied version in
+  `opus-mt/.models-version`; translate `/health` and `/capabilities` show it as `opus_models_version`.
+- Install: `docker compose pull && docker compose --profile init run --rm init-opus && docker compose up -d`.
+- Update (`./update.sh`): fresh node files, then
+  `want=$(sed -n 's/^OPUS_MODELS_TAG=//p' .env); want=${want:-1}`,
+  `have=$(docker compose run --rm --no-deps --entrypoint cat translate /cache/opus-mt/.models-version 2>/dev/null)`,
+  `[ "$have" = "$want" ] || docker compose --profile init run --rm init-opus`, then `docker compose pull` and
+  `docker compose up -d`, and finally `./prune.sh`.
+- `./prune.sh` (`--dry-run` to only list) removes the node's own images the current configuration no longer
+  references: old tags of ghcr.io/voxarbor/node-* and the speaches STT image, the models image after `init-opus`,
+  and untagged layers of this project (by its source label). Nothing else on the host is touched.
+- Images share layers: tts and diarize are built on node-base-av (python + ffmpeg) and node-base-torch (cpu or
+  cu128), so a node stores ffmpeg and torch once.
+
 ## Internal names (kept on purpose)
 
 The product is called VoxArbor Node (voxarbor-node) since 0.11.0; it was voice-core before. These internal names stay

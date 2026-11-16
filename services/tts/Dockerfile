@@ -1,11 +1,10 @@
-FROM python:3.12.12-slim
+ARG BASE_IMAGE=ghcr.io/voxarbor/node-base-torch:2.8.0-cpu-1
+FROM ${BASE_IMAGE}
 ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1 PIP_NO_CACHE_DIR=1 PIP_DEFAULT_TIMEOUT=120 PIP_RETRIES=10 \
     HF_HOME=/cache/hf STANZA_RESOURCES_DIR=/cache/stanza GRADIO_ANALYTICS_ENABLED=False \
     VOICES_DIR=/opt/space/voices SINGLE_STYLE=/opt/space/filatov.pt
-RUN apt-get update && apt-get install -y --no-install-recommends git git-lfs ffmpeg && rm -rf /var/lib/apt/lists/*
-# TORCH_VARIANT=cu128 builds the GPU image (node-tts-cuda): CUDA 12.8 wheels, which include Blackwell (RTX 50xx)
-ARG TORCH_VARIANT=cpu
-RUN pip install --index-url https://download.pytorch.org/whl/${TORCH_VARIANT} torch==2.8.0 torchaudio==2.8.0
+RUN apt-get update && apt-get install -y --no-install-recommends git git-lfs && rm -rf /var/lib/apt/lists/*  # ffmpeg: base
+# torch comes from the base: node-base-torch:<ver>-cpu here, -cu128 for node-tts-cuda (BASE_IMAGE build arg)
 COPY requirements.txt /tmp/
 RUN pip install -r /tmp/requirements.txt \
     && pip install --no-deps git+https://github.com/patriotyk/ukrainian-word-stress@d5b37ea0abe9711930d9c3b0b13edec5a0675512

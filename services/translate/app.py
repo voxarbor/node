@@ -55,10 +55,19 @@ async def _start() -> None:
     asyncio.create_task(_reaper())
 
 
+def _opus_version() -> str | None:
+    """The Opus-MT models version copied into the volume by init-opus (None: not copied yet, or an older copy)."""
+    try:
+        return open(os.path.join(worker.OPUS_DIR, ".models-version")).read().strip() or None
+    except OSError:
+        return None
+
+
 @app.get("/health")
 async def health() -> dict:
     return {"status": "ok", "fallback_model": MODEL if worker.nllb_enabled() else None, "loaded": _pool is not None, "idle_ttl": IDLE_TTL,
             "busy": _busy, "queue_max": QUEUE_MAX,
+            "opus_models_version": _opus_version(),
             "opus_pairs": sorted(d for d in (os.listdir(worker.OPUS_DIR) if os.path.isdir(worker.OPUS_DIR) else [])
                                  if os.path.isfile(os.path.join(worker.OPUS_DIR, d, "model.bin")))}
 
