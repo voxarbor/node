@@ -241,7 +241,10 @@ async def main():
         await co.wait(20, 60)
         await co.wait(21, 60)
         o = co.order
-        assert o.index(21) < len(o) // 2 and set(o[:8]) == {20, 21} or o.count(21) == 12, o[:24]
+        n21 = o.count(21)
+        assert o.index(21) < len(o) // 4, o[:24]  # the viewer stream starts early
+        half = o[: len(o) // 2]
+        assert half.count(21) >= n21 // 3, (half.count(21), n21)  # and interleaves instead of waiting behind 20
         print("round-robin + priority ok:", "".join("v" if x == 21 else "b" for x in o[:24]))
 
         await co.ws.send_str(json.dumps({"type": "caps_get"}))

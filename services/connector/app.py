@@ -38,7 +38,10 @@ STATE = os.path.join(STATE_DIR, "node.json")
 ENROLL_STATE = os.path.join(STATE_DIR, "enroll.json")
 
 PROTOCOL = 1
-CHUNK = 256 * 1024                 # binary frame payload
+MAX_FRAME = 256 * 1024             # largest binary payload the protocol allows (what we accept)
+CHUNK = 64 * 1024                  # what we send: smaller frames let pongs and close frames through sooner
+UNSENT_LOWAT = 64 * 1024           # TCP_NOTSENT_LOWAT: at most this much unsent data sits in the kernel, so the
+                                   # writer's priority (control frames first) also holds on a saturated uplink
 TEXT_MAX = 1024 * 1024             # text frame limit
 WINDOW = 1024 * 1024               # initial flow-control window per stream and direction
 INLINE_MAX = 64 * 1024
@@ -86,6 +89,20 @@ def ssl_context() -> ssl.SSLContext | None:
         ctx.check_hostname = False
         ctx.verify_mode = ssl.CERT_NONE
     return ctx
+
+
+def _tune_socket(ws) -> None:
+    """Keep the kernel's unsent backlog small (Linux TCP_NOTSENT_LOWAT): otherwise megabytes of audio frames wait
+    in the socket buffer ahead of a pong or a close frame, and on a slow uplink the coordinator or a proxy gives up
+    on the link (seen as a close without a close frame)."""
+    import socket as _s
+
+    try:
+        sock = ws.transport.get_extra_info("socket")
+        sock.setsockopt(_s.IPPROTO_TCP, getattr(_s, "TCP_NOTSENT_LOWAT", 25), UNSENT_LOWAT)
+        sock.setsockopt(_s.SOL_SOCKET, _s.SO_KEEPALIVE, 1)
+    except (OSError, AttributeError) as exc:
+        log.info("socket tuning skipped: %s", exc)
 
 
 class Retry(Exception):
@@ -283,7 +300,7 @@ class Link:
         if s is None:
             return
         data = msg[4:]
-        if len(data) > CHUNK or len(data) > s.recv_allowed:
+        if len(data) > MAX_FRAME or len(data) > s.recv_allowed:
             self.fail(s, "protocol_error", "body sent past the flow-control window")
             return
         s.recv_allowed -= len(data)
@@ -389,6 +406,11 @@ class Link:
             await asyncio.sleep(1)
             now = time.monotonic()
             if now - self.last_rx > 3 * self.heartbeat:
+                queued = len(self.control) + sum(len(x.chunks) for x in self.out.values())
+                qbytes = sum(len(c) for x in self.out.values() for c in x.chunks if isinstance(c, bytes))
+                log.warning("heartbeat timeout: no frame from the coordinator for %.0f s (limit %.0f s); "
+                            "own frames waiting to be sent: %d (%.1f MiB data), streams %d",
+                            now - self.last_rx, 3 * self.heartbeat, queued, qbytes / 2**20, len(self.streams))
                 await self.ws.close(4008, "heartbeat timeout")
                 return
             if now - last_ping >= self.heartbeat:
@@ -425,6 +447,7 @@ async def session(http: aiohttp.ClientSession, state: dict) -> None:
         ws_ctx = connect(url, additional_headers=headers, ssl=ssl_context() if url.startswith("wss") else None,
                          max_size=TEXT_MAX + 64, ping_interval=None, open_timeout=20, close_timeout=5)
         async with ws_ctx as ws:
+            _tune_socket(ws)
             link = Link(ws, http, state)
             caps = None
             try:
@@ -456,8 +479,14 @@ async def session(http: aiohttp.ClientSession, state: dict) -> None:
             raise Retry(30, f"upgrade refused: {code}")
         raise Retry(retry_after(h, 0), f"upgrade refused: {code}")
     except ConnectionClosed as exc:
-        code = exc.rcvd.code if exc.rcvd else 1006
-        reason = exc.rcvd.reason if exc.rcvd else "connection lost"
+        # who closed: the coordinator's close frame (rcvd), ours (sent: e.g. our 4008 heartbeat timeout, even when
+        # its answer never came back), or neither (the line dropped)
+        if exc.rcvd:
+            code, reason = exc.rcvd.code, f"by the coordinator: {exc.rcvd.reason}"
+        elif exc.sent:
+            code, reason = exc.sent.code, f"by us: {exc.sent.reason} (no close frame back)"
+        else:
+            code, reason = 1006, "connection lost (no close frame either way)"
         if code == 4001:
             raise Retry(600, f"closed {code}: {reason}", unauthorized=True)
         if code == 4002:  # protocol not supported: slow retry (30 s), not 10 min (a late hello once got 4002)
