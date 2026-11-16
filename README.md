@@ -1,6 +1,6 @@
-# voice-core
+# VoxArbor UA node (voice-core)
 
-Self-hosted voice services for Ukrainian, running on CPU: speech-to-text, text-to-speech, translation into
+The worker node of [VoxArbor UA](https://github.com/voxarbor). Self-hosted voice services for Ukrainian, running on CPU: speech-to-text, text-to-speech, translation into
 Ukrainian, punctuation restoration and speaker diarization, behind one gateway port with one token. Runs on one PC or as many worker nodes
 of a coordinator. No GPU, no cloud, no API keys of third parties.
 
@@ -42,9 +42,14 @@ Size threads and CPU limits to the machine in `.env`. Models load on demand and 
 
 ## Development
 
-Images are built by GitHub Actions (`.github/workflows/images.yml`) into `ghcr.io/voxarbor/node-<service>`
+Images are built by GitHub Actions (`.github/workflows/images.yml`) into `ghcr.io/voxarbor/node-<service>` (public, no login needed)
 (tags `v<release>` from the root `VERSION`, the service's own version, `sha-<12>`, `latest`; pin
 `VOICE_CORE_TAG=v<release>` on nodes); `models-opus.yml` builds the Opus-MT data image. Tests:
 `tests/test_speech.py` (text pipeline, no models) and `tests/test_pool.py` (worker queue), run inside the images.
 
 License: Apache-2.0.
+
+## License
+
+Apache-2.0 (LICENSE). Models and third-party components keep their own licenses: see NOTICE (some are
+opt-in and non-commercial, e.g. NLLB-200).

@@ -3,7 +3,7 @@ B = ByT5 G2P stressifier on the whole sentence, C = accentuk + ByT5 (in context)
 unmarked. Writes per-word results (JSON) for building a gold set; multi-syllable words only.
 
 docker run --rm --user 0 --cpus 2 -e API_KEY=x -e ACCENTUK_MODE=full -e ACCENTUK_ASSETS=/opt/accentuk-full \
-  -v tts-accentuk-full:/opt/accentuk-full:ro -v local-ai_tts-cache:/cache -v $PWD/services/tts:/app:ro \
+  -v tts-accentuk-full:/opt/accentuk-full:ro -v <tts cache volume>:/cache -v $PWD/services/tts:/app:ro \
   -v $PWD/tools:/tools:ro -v /path/out:/out --entrypoint sh <tts image> -c \
   'pip install -q --no-deps git+https://github.com/patriotyk/stressifier-byt5-ctranslate2@<sha> && \
    python /tools/stress_eval.py /out/phrases.txt /out/eval.json'"""

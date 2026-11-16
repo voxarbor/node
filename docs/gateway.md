@@ -3,7 +3,7 @@
 A voice-core node runs the voice services (STT, TTS, translate + punctuation, diarize) behind one gateway port with
 one token, so one PC or a coordinator spreading work over several PCs can use them through a single stable contract.
 
-## Images (GHCR, private)
+## Images (GHCR, public)
 
 Built by `.github/workflows/images.yml` on every push to `main` that touches a service (only that service is
 rebuilt; "Run workflow" rebuilds all). Tags: the service version (`services/<name>/VERSION`), `sha-<12>`, `latest`.

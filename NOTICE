@@ -1,28 +1,37 @@
-voice-core
-Copyright 2026 voxarbor
+VoxArbor UA node (voice-core)
+Copyright 2026 the VoxArbor UA authors
 
 The code in this repository is licensed under the Apache License 2.0 (see LICENSE). The services download or
-contain third-party models and libraries under their own licenses:
+contain third-party models and libraries under their own licenses; their copyright notices belong to their authors.
 
 Speech-to-text
-- speaches (container image ghcr.io/speaches-ai/speaches) - MIT
+- speaches (container image ghcr.io/speaches-ai/speaches, used unmodified) - MIT
+- faster-whisper / CTranslate2 - MIT
 - Whisper large-v3-turbo, OpenAI (CTranslate2 conversion deepdml/faster-whisper-large-v3-turbo-ct2) - MIT
 
 Text-to-speech
-- HolosTTS, patriotyk/HolosTTS (weights and package holos-tts) - MIT. Default engine.
+- HolosTTS, patriotyk/HolosTTS (weights holos.pt, voices.pt, voice_encoder.pt and the package holos-tts) - MIT.
+  The model author states that the preset voices were taken without their owners' consent: for commercial use,
+  agree with the voice owners, clone voices whose recordings allow it, or use voices nobody can recognize.
+  Custom voices (POST /v1/voices/encode) must be the operator's own voice or used with the speaker's explicit
+  consent; every installed custom voice carries a consent reference.
 - StyleTTS2-ukrainian, patriotyk/styletts2_ukrainian_single (MIT), patriotyk/styletts2_ukrainian_multispeaker
   (license not stated on the model page) and the preset voices of the Space patriotyk/styletts2-ukrainian (MIT).
-  OPT-IN (TTS_ENGINES=holos,styletts2): the multi-speaker preset voices are named after real narrators; make sure
-  you may use them before publishing anything made with them.
-- accentuk (stress and number verbalization) - Apache-2.0; ukrainian-word-stress - MIT; ipa-uk; stanza - Apache-2.0
+  OPT-IN (TTS_ENGINES=holos,styletts2), off by default: the multi-speaker preset voices are named after real
+  narrators; make sure you may use them before publishing anything made with them.
+- accentuk (stress and number verbalization) - Apache-2.0; ukrainian-word-stress - MIT; ipa-uk - MIT;
+  stanza - Apache-2.0; spaCy and uk_core_news_sm - MIT
 - skypro1111/m2m100-ukr-verbalization (optional verbalizer) - MIT
+- PyTorch / torchaudio - BSD-3-Clause; librosa - ISC; espeak-ng (English names) - GPL-3.0, invoked as a separate
+  program inside the image
 
 Translation and punctuation
-- Opus-MT tc-big models, Helsinki-NLP (University of Helsinki), converted to CTranslate2 - CC-BY-4.0
+- Opus-MT tc-big models, Helsinki-NLP / University of Helsinki (Tiedemann et al.), converted to CTranslate2 -
+  CC-BY-4.0
 - NLLB-200 distilled 600M, Meta (CTranslate2 conversion JustFrederik/nllb-200-distilled-600M-ct2-int8) -
   CC-BY-NC-4.0, NON-COMMERCIAL ONLY. OPT-IN (TRANSLATE_NLLB=1), off by default.
 - 1-800-BAD-CODE/xlm-roberta_punctuation_fullstop_truecase - Apache-2.0
-- py3langid - BSD-3-Clause; CTranslate2 - MIT; sentencepiece - Apache-2.0
+- py3langid - BSD-3-Clause; CTranslate2 - MIT; sentencepiece - Apache-2.0; ONNX Runtime - MIT
 
 Speaker diarization
 - sherpa-onnx (k2-fsa) - Apache-2.0
@@ -31,8 +40,9 @@ Speaker diarization
 - services/diarize/gender_lr.npz: a small classifier trained on the speaker embeddings of HolosTTS/StyleTTS2
   preset voices (tools/diarize_gender_train.py)
 
-Web UI / gateway
+Gateway, connector, API
 - Caddy - Apache-2.0
+- websockets - BSD-3-Clause; aiohttp - Apache-2.0; FastAPI - MIT; Uvicorn - BSD-3-Clause
 
 fetch (optional service): yt-dlp (Unlicense, https://github.com/yt-dlp/yt-dlp), yt-dlp-ejs (Unlicense), Deno (MIT).
 Users are responsible for complying with the terms of the sites they fetch from.

@@ -1,4 +1,4 @@
-# Worker-node images to GHCR (private): ghcr.io/voxarbor/node-<service>:<version> | sha-<short> | latest.
+# Worker-node images to GHCR (public): ghcr.io/voxarbor/node-<service>:<version> | sha-<short> | latest.
 # A push to main rebuilds only the services whose directory changed; "Run workflow" or a change of the root
 # VERSION (the voice-core release) rebuilds all, which then also carry the tag v<VERSION> (what nodes pin).
 # Models are not part of these builds except the TTS weights already in its Dockerfile (see docs/worker.md).
