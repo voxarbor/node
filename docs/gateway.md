@@ -254,6 +254,13 @@ first). Real example from a test node (lists shortened with "..."; `local_ai_ver
 }
 ```
 
+## Updater (since 0.13.0)
+
+`/capabilities.updater` (present when the node runs node-updater): `version`, `mode` (auto | notify | off, effective),
+`state` (idle | available | downloading | waiting_window | updating | checking | rolled_back | paused | error | off),
+`desired`, `available`, `error`, `seq`, `last_update` `{from, to, ok, at, error}`. Design and protocol:
+docs/updater.md.
+
 ## Gentle mode (since 0.12.3)
 
 `NODE_MODE=gentle` in `.env` (then `docker compose up -d`, or the next update) makes the node leave most of the

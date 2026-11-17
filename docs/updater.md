@@ -1,6 +1,6 @@
-# node-updater: automatic node updates (DESIGN, not implemented yet)
+# node-updater: automatic node updates (since 0.13.0)
 
-Status: proposal for review (2026-11-17). Protocol changes are additive to docs/connect.md (protocol 1) and to
+Status: implemented in 0.13.0 (design approved 2026-11-17). Protocol changes are additive to docs/connect.md (protocol 1) and to
 `/capabilities` (schema 1).
 
 ## Pieces and trust
@@ -12,8 +12,8 @@ coordinator --(WebSocket, existing)--> connector --(file in volume updater-ctl)-
                                                        ghcr.io/voxarbor/node-*@sha256 <-+ (images by digest)
 ```
 
-- New service `updater` (image `ghcr.io/voxarbor/node-updater`, ~60 MB: python, docker CLI + compose plugin, cosign,
-  all pinned). It is the only container with `/var/run/docker.sock`. No listening port, no coordinator connection.
+- New service `updater` (image `ghcr.io/voxarbor/node-updater`, ~250 MB: python, docker CLI + compose plugin,
+  cosign, all pinned with checksums). It is the only container with `/var/run/docker.sock`. No listening port, no coordinator connection.
 - The connector never gets the socket. It only writes the coordinator's wish into the shared volume `updater-ctl`
   (`desired.json`) and the node's load (`busy.json`). The updater only reads those two and writes `status.json`.
 - What the coordinator can say: "desired version vX.Y.Z" (+ mode, + "now"). Nothing else: no URLs, files, images
@@ -23,27 +23,36 @@ coordinator --(WebSocket, existing)--> connector --(file in volume updater-ctl)-
 
 ## Release manifest (CI)
 
-A new workflow job on every `v*` tag (after images are built) attaches to the GitHub release:
+`.github/workflows/release.yml` runs on every `v*` tag (pushed after images.yml built the release) and attaches to
+the GitHub release:
 
 | asset | content |
 |---|---|
 | `compose.yaml`, `compose.gpu.yaml`, `Caddyfile`, `prune.sh` | node files of that tag |
-| `manifest.json` | `{version, opus_models_tag, files: {name: sha256}, images: {"node-tts": "ghcr.io/voxarbor/node-tts@sha256:…", …, "speaches-cpu": …, "speaches-cuda": …, "caddy": …}, min_updater}` |
+| `manifest.json` | `{version, opus_models_tag, files: {name: sha256}, images: {"ghcr.io/voxarbor/node-tts:v0.13.0": "ghcr.io/voxarbor/node-tts@sha256:…", …}, opus_image: {ref, digest_ref}, min_updater}`: every image of the CPU and GPU configurations, keyed by the reference compose uses |
 | `manifest.json.sigstore.json` | cosign keyless bundle (GitHub OIDC, Rekor entry) |
 
 The updater verifies the bundle with `cosign verify-blob --bundle … --certificate-oidc-issuer
 https://token.actions.githubusercontent.com --certificate-identity
-https://github.com/voxarbor/node/.github/workflows/images.yml@refs/tags/<tag>`, then every file by sha256 from the
+https://github.com/voxarbor/node/.github/workflows/release.yml@refs/tags/<tag>`, then every file by sha256 from the
 manifest. Images are pulled by digest from the manifest and tagged locally as `:<tag>`; compose then runs with
 `--pull never`, so nothing unverified is started. If cosign cannot reach Sigstore, the update waits (no fallback to
 unsigned).
 
 ## Control channel (connector <-> updater, volume `updater-ctl`)
 
-Additive to connect.md. Coordinator -> node, in `welcome` and in any later `caps_ack`/heartbeat reply:
-```json
-"update": {"version": "v0.13.0", "mode": "auto", "now": false, "paused": false}
-```
+Additive to connect.md (protocol stays 1). Coordinator -> node, any of:
+- `welcome` with a field `"update": {...}`;
+- its `ping` with a field `"update": {...}`;
+- a frame `{"type": "update", "version": "v0.13.1", "mode": "auto", "now": false, "paused": false}` whenever it
+  changes (recommended).
+
+`update` fields (all optional): `version` (`vX.Y.Z`; null/absent = no wish), `mode` (`auto` | `notify` | `off`),
+`now` (bool), `paused` (bool). Each message replaces the previous wish completely. Older connectors ignore it.
+
+Node -> coordinator: every node `ping` carries `"updater": {"state": "<state>", "seq": <int>}`; `seq` grows on every
+change of the updater's public status, so the coordinator sends `caps_get` (or waits for the next `caps`) when it
+changes. Capabilities also change by themselves (the connector sends `caps` on any change).
 `mode` (optional): the coordinator-side setting from «Мої вузли»; `now`: the «Оновити» button (needed in `notify`
 mode); `paused`: the owner paused the node on the site. The connector writes it as `desired.json`
 (`{..., "received_at"}`) and every 5 s `busy.json` `{"streams": <active streams>, "at"}`.
@@ -59,9 +68,14 @@ Effective mode = the stricter of `.env` `UPDATER_MODE` (auto | notify | off, def
 
 ## Safe window
 
-All of: `busy.json` fresh (< 30 s) with 0 streams for 2 minutes; TTS `/health` busy 0 and jobs 0; not `paused`
-(the owner took the machine back: no multi-GB downloads now). Downloads (images by digest) happen *before* the window,
-while the node still works; the window is only needed for `up -d` (~1 min of downtime).
+All of: `busy.json` fresh (< 30 s) with 0 streams for 2 minutes; TTS `/health` busy 0 and jobs 0; not `paused`.
+`paused` blocks everything, downloads included, and `now` does not override it (pause = «don't touch my PC»).
+Downloads (images by digest) run only while the node has no stream (a stream starting cancels the pull, it resumes
+later), so they never compete with live work; with `NODE_MODE=gentle` only inside the 2-minute idle window. The
+window itself is needed for `up -d` (~1 min of downtime).
+
+Cheap local checks: only this container's own compose project; manifest images only `ghcr.io/voxarbor/node-*`,
+`ghcr.io/speaches-ai/speaches` and `caddy`, always `repo@sha256:…` matching the reference's repository.
 
 ## Update run
 
@@ -101,8 +115,16 @@ The connector also sends it with its periodic capabilities, so the coordinator s
 files on the node: old `update.sh` keeps working). From then on nodes update themselves. Nodes with a custom layout
 (several `-f` files, `.env` elsewhere) work through the labels above; a node can set `UPDATER_MODE=off`.
 
-## Open questions for the coordinator side (Opus)
+## Decided (2026-11-17)
 
-- Should `paused` block updates (as proposed) or should a paused node be the preferred update target?
-- Staged rollout ("selected nodes first"): only the coordinator decides which nodes get which `update.version`.
-- Does the coordinator want a separate `update_status` message instead of reading `capabilities.updater`?
+- `paused` blocks updates and downloads; `now` does not override it.
+- No separate status message: `capabilities.updater` + `ping.updater {state, seq}`.
+- Staged rollout ("selected nodes first") is the coordinator's choice of which nodes get which `update.version`.
+- No socket-filter container: the signature, sha256, digests and the absence of any input except the version are the
+  security boundary.
+
+## Custom layouts
+
+The updater reuses the compose labels of its own container. Every file there (compose files, env file) must be
+visible inside it: the node folder is mounted (`.:/node`); files elsewhere (an override, an env file in another
+folder) need an extra bind mount at the same path in the override file, or `UPDATER_MODE=off`.

@@ -98,6 +98,17 @@ def static_info() -> dict:
     return info
 
 
+def updater() -> dict:
+    """node-updater's status (volume updater-ctl, read-only here): {"updater": {...}} or nothing without an updater"""
+    try:
+        with open(os.path.join(os.environ.get("UPDATER_CTL", "/ctl"), "status.json")) as f:
+            st = json.load(f)
+    except (OSError, ValueError):
+        return {}
+    keys = ("version", "mode", "state", "desired", "available", "error", "seq", "last_update")
+    return {"updater": {k: st.get(k) for k in keys}}
+
+
 def capabilities() -> dict:
     services, st = {}, static_info()
     for name, url in SERVICES.items():
@@ -152,12 +163,12 @@ def capabilities() -> dict:
                 s.update(available=False, healthy=False, error=type(exc).__name__)
         services[name] = s
     node = host()
-    node["mode"] = os.environ.get("NODE_MODE", "normal")   # normal | gentle (modes/*.yaml)
+    node["mode"] = os.environ.get("NODE_MODE", "normal")   # normal | gentle
     node["gpu_used"] = any(s.get("device") == "cuda" for s in services.values())
     return {"schema": 1, "product": "voxarbor-node", "product_version": VERSION,
             "voice_core_version": VERSION, "local_ai_version": VERSION,
             "voice_core_tag": TAG or None, "voice_core_release": RELEASE, "generated_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
-            "node": node, "services": services,
+            "node": node, "services": services, **updater(),
             "gateway_paths": {k: f"/{k}/" for k in SERVICES}}
 
 

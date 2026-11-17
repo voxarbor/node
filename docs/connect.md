@@ -73,7 +73,8 @@ Frames:
 | coord -> node | `welcome` | `protocol: 1`, `node_id`, `heartbeat_s` (the coordinator sets it; 10 s recommended, 5-60 accepted), `max_streams` (≤ the node's) |
 | node -> coord | `caps` | `capabilities`: sent every 30 s and immediately when a service, voice, lexicon hash or version changes |
 | coord -> node | `caps_get` | asks for a `caps` now |
-| both | `ping` / `pong` | `t` (sender's clock, ms); each side pings every `heartbeat_s`; no frame at all for 3 × `heartbeat_s` = dead link |
+| coord -> node | `update` | since 0.13.0, optional: `version`, `mode`, `now`, `paused` (the node's desired version, docs/updater.md); also accepted as a field `update` of `welcome` and of the coordinator's `ping` |
+| both | `ping` / `pong` | `t` (sender's clock, ms); each side pings every `heartbeat_s`; no frame at all for 3 × `heartbeat_s` = dead link. Since 0.13.0 the node's ping carries `updater: {state, seq}` (docs/updater.md) |
 | coord -> node | `rotate_token` | `node_token`: the new credential; the connector writes it to `/state/node.json` (atomically) and answers |
 | node -> coord | `rotated` | after the new token is stored. The old token stays valid until `rotated` arrives or the node connects with the new one, whichever is first (a crash mid-rotation never locks the node out); the open connection stays |
 

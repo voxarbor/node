@@ -9,7 +9,7 @@ name: images
 on:
   push:
     branches: [main]
-    paths: ["services/base-av/**", "services/base-torch/**", "services/tts/**", "services/translate/**", "services/diarize/**", "services/node-info/**", "services/fetch/**", "services/connector/**", "VERSION", ".github/workflows/images.yml"]
+    paths: ["services/base-av/**", "services/base-torch/**", "services/tts/**", "services/translate/**", "services/diarize/**", "services/node-info/**", "services/fetch/**", "services/connector/**", "services/updater/**", "VERSION", ".github/workflows/images.yml"]
   workflow_dispatch:
 permissions:
   contents: read
@@ -53,6 +53,7 @@ jobs:
           - { service: node-info, image: node-info, args: "" }
           - { service: fetch, image: fetch, args: "" }
           - { service: connector, image: connector, args: "" }
+          - { service: updater, image: updater, args: "" }
     steps:
       - uses: actions/checkout@v4
         with: { fetch-depth: 2 }

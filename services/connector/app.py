@@ -36,6 +36,7 @@ INSECURE = os.environ.get("CONNECT_INSECURE_TLS", "") == "1"
 STATE_DIR = os.environ.get("CONNECT_STATE_DIR", "/state")
 STATE = os.path.join(STATE_DIR, "node.json")
 ENROLL_STATE = os.path.join(STATE_DIR, "enroll.json")
+CTL_DIR = os.environ.get("UPDATER_CTL", "/ctl")    # shared with node-updater (docs/updater.md); absent = no updater
 
 PROTOCOL = 1
 UA = f"voxarbor-node-connector/{VERSION}"
@@ -57,6 +58,40 @@ METHODS = {"GET", "POST", "PUT", "DELETE", "PATCH", "HEAD"}
 log = logging.getLogger("connector")
 status = {"connected": False, "coordinator": None, "node_id": None, "last_error": None, "since": None,
           "streams": 0, "retry_at": None}
+
+
+# ---------------------------------------------------------------- updater channel --------------------------------
+def ctl_write(name: str, data: dict) -> None:
+    if not os.path.isdir(CTL_DIR):
+        return
+    try:
+        tmp = os.path.join(CTL_DIR, name + ".tmp")
+        with open(tmp, "w") as f:
+            json.dump(data, f)
+        os.replace(tmp, os.path.join(CTL_DIR, name))
+    except OSError as exc:
+        log.warning("updater channel: %s", exc)
+
+
+def on_update(u) -> None:
+    """the coordinator's wish for this node's version (docs/updater.md): only these fields pass to the updater"""
+    if not isinstance(u, dict):
+        return
+    v = u.get("version")
+    ctl_write("desired.json", {"version": v if isinstance(v, str) and len(v) <= 32 else None,
+                               "mode": u.get("mode") if u.get("mode") in ("auto", "notify", "off") else None,
+                               "now": u.get("now") is True, "paused": u.get("paused") is True,
+                               "received_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())})
+
+
+def updater_brief() -> dict | None:
+    """state + change counter for every ping: the coordinator re-reads capabilities when seq changes"""
+    try:
+        with open(os.path.join(CTL_DIR, "status.json")) as f:
+            st = json.load(f)
+        return {"state": st.get("state"), "seq": st.get("seq")}
+    except (OSError, ValueError):
+        return None
 
 
 # ---------------------------------------------------------------- state ------------------------------------------
@@ -285,6 +320,10 @@ class Link:
                     s.credit.set()
             elif t == "ping":
                 self.send_json({"type": "pong", "t": f.get("t")})
+                if "update" in f:
+                    on_update(f["update"])
+            elif t == "update":
+                on_update(f)
             elif t == "caps_get":
                 await self.send_caps(force=True)
             elif t == "rotate_token" and isinstance(f.get("node_token"), str) and f["node_token"]:
@@ -416,11 +455,17 @@ class Link:
                 return
             if now - last_ping >= self.heartbeat:
                 last_ping = now
-                self.send_json({"type": "ping", "t": int(time.time() * 1000)})
+                ping = {"type": "ping", "t": int(time.time() * 1000)}
+                upd = updater_brief()
+                if upd:
+                    ping["updater"] = upd
+                self.send_json(ping)
             for s in list(self.streams.values()):
                 if now - s.last > IDLE_S and s.task and not s.idle:
                     s.idle = True
                     s.task.cancel()
+            if int(now) % 5 == 0:
+                ctl_write("busy.json", {"streams": len(self.streams), "at": time.time()})
             if int(now) % 5 == 0 and (self.caps_task is None or self.caps_task.done()):
                 # its own task: a slow local /capabilities (up to 15 s) must not hold back the pings
                 self.caps_task = asyncio.create_task(self.send_caps())
@@ -467,6 +512,8 @@ async def session(http: aiohttp.ClientSession, state: dict) -> None:
                 raise Retry(30, "no welcome from the coordinator")
             link.heartbeat = min(60, max(5, float(welcome.get("heartbeat_s", 10))))
             link.max_streams = min(MAX_STREAMS, int(welcome.get("max_streams", MAX_STREAMS)))
+            if "update" in welcome:
+                on_update(welcome["update"])
             status["welcomed"] = True  # the main loop resets its backoff: a short session is not a failed connect
             status.update(connected=True, coordinator=COORDINATOR_URL, node_id=welcome.get("node_id"),
                           since=time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()), last_error=None)

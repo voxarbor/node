@@ -1,0 +1,27 @@
+name: release
+# On a v* tag (pushed after images.yml built that release): attaches the node files and a signed manifest
+# (sha256 of the files, every image by digest) to the GitHub release. node-updater verifies the signature
+# (cosign keyless: this workflow at that tag) and the sha256 before it uses anything (docs/updater.md).
+on:
+  push:
+    tags: ["v*"]
+permissions:
+  contents: write
+  id-token: write
+jobs:
+  manifest:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - uses: sigstore/cosign-installer@v3
+        with: { cosign-release: v3.1.4 }
+      - name: manifest
+        run: python3 .github/release_manifest.py "${{ github.ref_name }}" > manifest.json && cat manifest.json
+      - name: sign
+        run: cosign sign-blob --yes --bundle manifest.json.sigstore.json manifest.json
+      - name: release assets
+        env: { GH_TOKEN: "${{ github.token }}", TAG: "${{ github.ref_name }}" }
+        run: |
+          gh release view "$TAG" >/dev/null 2>&1 || gh release create "$TAG" --title "$TAG" --notes "Опис релізу буде додано."
+          gh release upload "$TAG" compose.yaml compose.gpu.yaml Caddyfile prune.sh manifest.json manifest.json.sigstore.json --clobber
