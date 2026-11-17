@@ -8,7 +8,9 @@ with one token. Runs on one PC or as one of many worker nodes of a coordinator. 
 
 **What is open.** The node (all services, the updater) and its installer `install.sh` are open: this repository. The
 VoxArbor coordinator (the site and the scheduling across nodes) is closed; a node gives it only requests to its voice
-services, no access to your computer (docs/security.md, Ukrainian). NLLB-200 (non-commercial, CC-BY-NC) is off by default.
+services, no access to your computer (docs/security.md, Ukrainian). About your PC it sees only general facts (CPU and GPU model,
+threads, RAM size, OS name, measured speed), no serials, MAC addresses, user names or paths (full list in
+docs/security.md). NLLB-200 (non-commercial, CC-BY-NC) is off by default.
 
 The idea of VoxArbor: people pool their computers into a network that translates and voices videos in Ukrainian.
 More at [github.com/voxarbor](https://github.com/voxarbor).

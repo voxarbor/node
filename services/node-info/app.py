@@ -4,6 +4,7 @@ Schema is versioned (`schema`); fields are only ever added. GET /health is open.
 
 from __future__ import annotations
 
+import glob
 import hashlib
 import json
 import os
@@ -45,6 +46,52 @@ def get(url: str, auth: bool = True, timeout: float = 5):
         return {"status": "ok" if body.strip().upper() == b"OK" else body.decode(errors="replace")[:100]}
 
 
+_HW: dict = {}
+VENDORS = {"0x10de": "nvidia", "0x1002": "amd", "0x8086": "intel"}
+
+
+def hardware() -> dict:
+    """general facts about the machine for benchmarks; no identifiers (serials, MAC, UUIDs, host or user names, paths,
+    processes): see docs/security.md «Які дані про ваш комп'ютер бачить координатор»"""
+    if _HW:
+        return _HW
+    cpu = None
+    try:
+        for line in open("/proc/cpuinfo"):
+            if line.lower().startswith("model name"):
+                cpu = line.split(":", 1)[1].strip()
+                break
+    except OSError:
+        pass
+    osname = None
+    try:  # the host's os-release, mounted read-only by compose.yaml (the container's own would say Debian)
+        rel = dict(l.rstrip("\n").split("=", 1) for l in open("/host/os-release") if "=" in l)
+        osname = rel.get("PRETTY_NAME", "").strip('"') or None
+    except (OSError, ValueError):
+        pass
+    try:
+        kernel = open("/proc/sys/kernel/osrelease").read().strip()
+    except OSError:
+        kernel = ""
+    if "microsoft" in kernel.lower():
+        osname = f"{osname or 'Linux'} · WSL2"
+    drm = []  # GPUs Linux sees through DRM (native Linux; WSL has none): vendor + PCI device id only
+    for card in sorted(glob.glob("/sys/class/drm/card[0-9]")):
+        try:
+            v = open(f"{card}/device/vendor").read().strip()
+            d = open(f"{card}/device/device").read().strip()
+        except OSError:
+            continue
+        name = None
+        try:
+            name = open(f"{card}/device/product_name").read().strip() or None  # amdgpu exposes it on some boards
+        except OSError:
+            pass
+        drm.append((VENDORS.get(v, "other"), name or f"{VENDORS.get(v, 'unknown').upper()} GPU (PCI {v}:{d})"))
+    _HW.update(cpu_model=cpu, cpu_threads=os.cpu_count(), os=osname, kernel=kernel or None, drm_gpus=drm)
+    return _HW
+
+
 def host() -> dict:
     mem = {}
     try:
@@ -61,13 +108,22 @@ def host() -> dict:
     out = {"cpu_cores": os.cpu_count(), "ram_total_gb": round(mem.get("MemTotal", 0) / 1024 ** 3, 1),
            "ram_available_gb": round(mem.get("MemAvailable", 0) / 1024 ** 3, 1), "load_avg": load,
            "gpu": gpu, "gpu_used": False, "gpu_name": None, "vram_gb": None}
+    hw = hardware()
+    out.update(cpu_model=hw["cpu_model"], cpu_threads=hw["cpu_threads"], os=hw["os"])
+    if hw["drm_gpus"]:  # native Linux: the first discrete-looking GPU (NVIDIA/AMD before Intel)
+        vendor, name = sorted(hw["drm_gpus"], key=lambda g: ["nvidia", "amd", "intel", "other"].index(g[0]))[0]
+        out.update(gpu_vendor=vendor, gpu_name=name)
+    elif os.path.exists("/dev/dxg"):
+        out["gpu_vendor"] = "unknown"  # WSL: a GPU is passed through, Linux cannot tell which (nvidia-smi below can)
+    else:
+        out["gpu_vendor"] = "none"
     if shutil.which("nvidia-smi"):  # node-info sees the GPU only with compose.gpu.yaml
         try:
             line = subprocess.run(["nvidia-smi", "--query-gpu=name,memory.total,memory.used,utilization.gpu",
                                    "--format=csv,noheader,nounits"], capture_output=True, text=True,
                                   timeout=5).stdout.strip().splitlines()[0]
             name, total, used, util = [x.strip() for x in line.split(",")]
-            out.update(gpu=True, gpu_name=name, vram_gb=round(float(total) / 1024, 1),
+            out.update(gpu=True, gpu_vendor="nvidia", gpu_name=name, vram_gb=round(float(total) / 1024, 1),
                        vram_used_gb=round(float(used) / 1024, 1), gpu_util_pct=int(float(util)))
         except Exception:
             pass
@@ -136,6 +192,7 @@ def capabilities() -> dict:
                                        if mi.get("stress") == "accentuk" else mi.get("stress")),
                          verbalizer=mi.get("verbalizer"))
                 s["features"] = h.get("features", [])
+                s["perf"] = h.get("perf")   # audio seconds synthesized per second of work, last hour
                 s.update(jobs=h.get("jobs"), **{k: v for k, v in st.get("tts", {}).items()})
                 try:  # lets a coordinator check cheaply that this node's stress lexicon matches its source
                     lex = get(f"{url}/v1/lexicon", timeout=5)["text"]
@@ -154,6 +211,7 @@ def capabilities() -> dict:
                                   "/v1/text/prepare", "/v1/text/phonemize", "/v1/warmup", "/v1/voices/encode",
                                   "/v1/voices/custom"]
             elif name == "translate":
+                s["perf"] = h.get("perf")   # sentences translated per second of work, last hour
                 s.update(engine="opus", model="Helsinki-NLP Opus-MT tc-big (en-zle and other pairs -> uk), CTranslate2 int8",
                          model_revision=f"opus-models-{h.get('opus_models_version')}" if h.get("opus_models_version") else None,
                          punctuation_revision=(h.get("punctuation_revision") or "")[:12] or None)
@@ -188,6 +246,11 @@ def capabilities() -> dict:
                 s.update(available=False, healthy=False, error=type(exc).__name__)
         services[name] = s
     node = host()
+    try:  # STT speed is measured by the connector on the coordinator's real requests
+        services.get("stt", {})["perf"] = get(os.environ.get("CONNECTOR_URL", "http://connector:8000") + "/health",
+                                              timeout=3).get("stt_perf")
+    except Exception:
+        pass
     node["mode"] = os.environ.get("NODE_MODE", "normal")   # normal | gentle
     node["gpu_used"] = any(s.get("device") == "cuda" for s in services.values())
     return {"schema": 1, "product": "voxarbor-node", "product_version": VERSION,

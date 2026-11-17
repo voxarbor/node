@@ -257,6 +257,15 @@ first). Real example from a test node (lists shortened with "..."; `local_ai_ver
 }
 ```
 
+## Hardware and speed (since 0.14.3)
+
+`node`: `cpu_model`, `cpu_threads`, `os` (host's PRETTY_NAME, «· WSL2» under WSL), `gpu_vendor` (nvidia | amd | intel |
+none | unknown — WSL passes a GPU that Linux cannot name), `gpu_name` (NVIDIA via nvidia-smi; AMD/Intel via
+/sys/class/drm on native Linux), plus the earlier `ram_total_gb`, `vram_gb` …. `services.stt|tts|translate.perf`:
+`{jobs, units, seconds, per_second, window_s: 3600}` from real work in the last hour — audio seconds per second of work
+(stt: measured by the connector on the coordinator's verbose_json requests; tts: per synthesized segment) and
+sentences per second (translate); null/0 jobs when idle. No identifiers are reported (docs/security.md).
+
 ## Models per service (since 0.13.2)
 
 Every service in `/capabilities.services` reports the same fields (added, nothing renamed): `model` (human name),

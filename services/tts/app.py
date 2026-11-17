@@ -223,8 +223,11 @@ async def _synth_one(spoken: str, p: dict, request: Request | None = None):
     """Waits instead of failing while the worker queue is full."""
     while True:
         try:
-            return await run(worker.synthesize, spoken, p["voice"], p["speed"], p["model"], p["pause_ms"],
-                             p["verbalize"], p["engine"], p.get("lexicon", True), request=request)
+            t0 = time.monotonic()
+            out = await run(worker.synthesize, spoken, p["voice"], p["speed"], p["model"], p["pause_ms"],
+                            p["verbalize"], p["engine"], p.get("lexicon", True), request=request)
+            PERF.add(len(out[0]) / 4 / worker.SAMPLE_RATE, time.monotonic() - t0)
+            return out
         except HTTPException as exc:
             if exc.status_code != 429:
                 raise
@@ -250,12 +253,36 @@ async def _plan(text: str, req: SpeechRequest) -> list[dict]:
     return segs
 
 
+
+class _Perf:
+    """speed from real work over the last hour: units done (audio seconds / sentences) per second of work"""
+    def __init__(self, window: float = 3600):
+        import collections
+        self.window, self.items = window, collections.deque()
+
+    def add(self, units: float, seconds: float) -> None:
+        import time as _t
+        if units > 0 and seconds > 0:
+            self.items.append((_t.monotonic(), units, seconds))
+
+    def summary(self) -> dict:
+        import time as _t
+        cut = _t.monotonic() - self.window
+        while self.items and self.items[0][0] < cut:
+            self.items.popleft()
+        u, s = sum(x[1] for x in self.items), sum(x[2] for x in self.items)
+        return {"jobs": len(self.items), "units": round(u, 1), "seconds": round(s, 1),
+                "per_second": round(u / s, 2) if s else None, "window_s": int(self.window)}
+
+
+PERF = _Perf()
+
 @app.get("/health")
 async def health() -> dict:
     loading = _warming is not None and not _warming.done()  # models are being loaded by /v1/warmup
     return {"status": "ok", "loaded": _pool is not None and not loading, "loading": loading, "idle_ttl": IDLE_TTL,
             "ui": ENABLE_UI, "jobs": JOBS.counts(), "busy": _busy, "queue_max": QUEUE_MAX, "device": _device(),
-            "features": FEATURES, "model_info": _model_info()}
+            "features": FEATURES, "model_info": _model_info(), "perf": PERF.summary()}
 
 
 def _model_info() -> dict:
@@ -488,9 +515,11 @@ async def speech(req: SpeechRequest, request: Request) -> Response:
         if speechtext.ASIDE_START in text:
             pcm, _ = await _synth(text, dict(_params(req, engine, model, voice), speed=speed), request)
         else:
+            t1 = time.monotonic()
             pcm, _ = await run(worker.synthesize, text, voice, speed, model, req.pause_ms, req.verbalize, engine,
                                req.lexicon,
                                request=request)
+            PERF.add(len(pcm) / 4 / worker.SAMPLE_RATE, time.monotonic() - t1)
         return pcm
 
     t0 = time.monotonic()

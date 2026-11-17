@@ -66,10 +66,34 @@ def _opus_version() -> str | None:
         return None
 
 
+
+class _Perf:
+    """speed from real work over the last hour: units done (audio seconds / sentences) per second of work"""
+    def __init__(self, window: float = 3600):
+        import collections
+        self.window, self.items = window, collections.deque()
+
+    def add(self, units: float, seconds: float) -> None:
+        import time as _t
+        if units > 0 and seconds > 0:
+            self.items.append((_t.monotonic(), units, seconds))
+
+    def summary(self) -> dict:
+        import time as _t
+        cut = _t.monotonic() - self.window
+        while self.items and self.items[0][0] < cut:
+            self.items.popleft()
+        u, s = sum(x[1] for x in self.items), sum(x[2] for x in self.items)
+        return {"jobs": len(self.items), "units": round(u, 1), "seconds": round(s, 1),
+                "per_second": round(u / s, 2) if s else None, "window_s": int(self.window)}
+
+
+PERF = _Perf()
+
 @app.get("/health")
 async def health() -> dict:
     return {"status": "ok", "fallback_model": MODEL if worker.nllb_enabled() else None, "loaded": _pool is not None, "idle_ttl": IDLE_TTL,
-            "busy": _busy, "queue_max": QUEUE_MAX, "engine": "opus",
+            "busy": _busy, "queue_max": QUEUE_MAX, "engine": "opus", "perf": PERF.summary(),
             "punctuation_model": "1-800-BAD-CODE/xlm-roberta_punctuation_fullstop_truecase",
             "punctuation_revision": "d1769a597ce8dfaa070d436bc67d4ee761f58884",  # = punct.REVISION (not imported here)
             "opus_models_version": _opus_version(),
@@ -189,8 +213,10 @@ async def translate(req: TranslateRequest, request: Request) -> dict:
         translated, model = sentences, None  # nothing to do, keep the input
     else:
         try:
+            t0 = time.monotonic()
             translated, model = await _run(worker.translate, sentences, source, target, req.beam_size,
                                             request=request)
+            PERF.add(len(sentences), time.monotonic() - t0)
         except ValueError as exc:  # e.g. a pair that needs the opt-in NLLB
             raise HTTPException(422, str(exc))
     it = iter(translated)

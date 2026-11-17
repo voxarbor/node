@@ -60,6 +60,30 @@ status = {"connected": False, "coordinator": None, "node_id": None, "last_error"
           "streams": 0, "retry_at": None}
 
 
+
+class _Perf:
+    """speed from real work over the last hour: units done (audio seconds / sentences) per second of work"""
+    def __init__(self, window: float = 3600):
+        import collections
+        self.window, self.items = window, collections.deque()
+
+    def add(self, units: float, seconds: float) -> None:
+        import time as _t
+        if units > 0 and seconds > 0:
+            self.items.append((_t.monotonic(), units, seconds))
+
+    def summary(self) -> dict:
+        import time as _t
+        cut = _t.monotonic() - self.window
+        while self.items and self.items[0][0] < cut:
+            self.items.popleft()
+        u, s = sum(x[1] for x in self.items), sum(x[2] for x in self.items)
+        return {"jobs": len(self.items), "units": round(u, 1), "seconds": round(s, 1),
+                "per_second": round(u / s, 2) if s else None, "window_s": int(self.window)}
+
+
+STT_PERF = _Perf()
+
 # ---------------------------------------------------------------- updater channel --------------------------------
 def ctl_write(name: str, data: dict) -> None:
     if not os.path.isdir(CTL_DIR):
@@ -412,12 +436,16 @@ class Link:
             self.fail(s, "bad_request", str(exc))
 
     async def forward(self, s: Stream, method: str, path: str, headers: dict, data) -> None:
+        stt = path.startswith("/stt/") and "transcriptions" in path
+        t0, body = time.monotonic(), bytearray()
         async with self.http.request(method, GATEWAY + path, headers=headers, data=data, allow_redirects=False,
                                      timeout=aiohttp.ClientTimeout(total=None, sock_connect=10, sock_read=3600)) as r:
             out = {k.lower(): v for k, v in r.headers.items()
                    if k.lower() in RES_HEADERS or k.lower().startswith("x-")}
             self.send_json({"type": "res", "id": s.id, "status": r.status, "headers": out})
             async for chunk in r.content.iter_any():
+                if stt and r.status == 200 and len(body) < 4 * 2**20:
+                    body += chunk
                 for i in range(0, len(chunk), CHUNK):
                     part = chunk[i:i + CHUNK]
                     while s.send_credit < len(part):  # wait for the coordinator to grant more
@@ -426,6 +454,12 @@ class Link:
                     s.send_credit -= len(part)
                     self.queue_data(s, part)
         self.close_stream(s, {"type": "res_end", "id": s.id})
+        if stt and body:
+            try:  # verbose_json: "duration" = audio seconds (other formats: not measured)
+                dur = float(json.loads(bytes(body)).get("duration") or 0)
+                STT_PERF.add(dur, time.monotonic() - t0)
+            except (ValueError, AttributeError, TypeError):
+                pass
 
     # ---- periodic
     async def send_caps(self, force: bool = False) -> None:
@@ -592,6 +626,7 @@ async def main_loop() -> None:
 
 async def health(_: web.Request) -> web.Response:
     return web.json_response({"status": "ok", "version": VERSION, "protocol": PROTOCOL, "enabled": bool(COORDINATOR_URL),
+                              "stt_perf": STT_PERF.summary(),
                               "enrolled": os.path.isfile(STATE), "insecure_tls": INSECURE, **status})
 
 
