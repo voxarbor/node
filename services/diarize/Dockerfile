@@ -22,7 +22,7 @@ RUN if [ "$DIARIZE_VARIANT" = cuda ]; then \
         torch==2.8.0 torchaudio==2.8.0 torchcodec==0.7.0 numpy==2.2.6; fi  # torch pinned = node-base-torch cu128 layer, no second copy
 RUN --mount=type=secret,id=hf_token,required=false if [ "$DIARIZE_VARIANT" = cuda ]; then \
       HF_TOKEN=$(cat /run/secrets/hf_token) python -c "import os; from huggingface_hub import snapshot_download as d; d('pyannote/speaker-diarization-community-1', revision='$PYANNOTE_REVISION', local_dir='/models/community-1', token=os.environ['HF_TOKEN'])" \
-      && rm -rf /models/community-1/.cache /models/community-1/*.gif && ls /models/community-1; fi
+      && rm -rf /models/community-1/.cache /models/community-1/*.gif /tmp/.cache && ls /models/community-1; fi  # /tmp/.cache: root-owned otherwise, the service (nobody) needs it
 WORKDIR /app
 COPY app.py worker.py gender_lr.npz ./
 USER nobody

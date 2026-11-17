@@ -152,6 +152,7 @@ def capabilities() -> dict:
                 s.update(available=False, healthy=False, error=type(exc).__name__)
         services[name] = s
     node = host()
+    node["mode"] = os.environ.get("NODE_MODE", "normal")   # normal | gentle (modes/*.yaml)
     node["gpu_used"] = any(s.get("device") == "cuda" for s in services.values())
     return {"schema": 1, "product": "voxarbor-node", "product_version": VERSION,
             "voice_core_version": VERSION, "local_ai_version": VERSION,

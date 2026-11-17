@@ -1,0 +1,14 @@
+# NODE_MODE=normal (default): per-mode settings that compose.yaml pulls in with `extends` (docs/gateway.md «Gentle mode»).
+services:
+  stt:
+    cpu_shares: 256   # batch: live TTS wins under contention
+    environment: { WHISPER__CPU_THREADS: "${STT_THREADS:-4}" }
+  tts:
+    environment: { TORCH_THREADS: "${TTS_THREADS:-2}" }
+  translate:
+    environment: { TRANSLATE_THREADS: "${TRANSLATE_THREADS:-2}" }
+  diarize:
+    cpu_shares: 256   # batch: live TTS wins under contention
+    environment: { DIARIZE_THREADS: "${DIARIZE_THREADS:-2}" }
+  connector:
+    environment: { CONNECT_MAX_STREAMS: "${CONNECT_MAX_STREAMS:-16}" }

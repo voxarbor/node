@@ -254,6 +254,15 @@ first). Real example from a test node (lists shortened with "..."; `local_ai_ver
 }
 ```
 
+## Gentle mode (since 0.12.3)
+
+`NODE_MODE=gentle` in `.env` (then `docker compose up -d`, or the next update) makes the node leave most of the
+machine to its owner: the connector takes one task at a time (it tells the coordinator `max_streams: 1`, so GPU work
+is serial too), STT/TTS/translate/diarize use half their CPU threads (`*_THREADS_GENTLE` overrides: 2/1/1/1) and a low
+CPU weight (`cpu_shares` 128). Default `normal`. `/capabilities` reports it as `node.mode` (`normal` | `gentle`).
+The per-mode settings live in `modes/normal.yaml` and `modes/gentle.yaml` (pulled in by `extends`), so an installer
+must ship the `modes/` folder next to `compose.yaml`.
+
 ## Install, update, prune (since 0.12.0)
 
 - The Opus-MT models are copied into the translate volume by the one-off `init-opus` (compose profile `init`; the
