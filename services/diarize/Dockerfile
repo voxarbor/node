@@ -17,6 +17,7 @@ RUN pip install --no-cache-dir --timeout 120 --retries 10 sherpa-onnx==2.0.1 sou
 # allows redistribution with attribution, see NOTICE), so nodes need no token. The CPU image stays sherpa-onnx only.
 ARG DIARIZE_VARIANT=cpu
 ARG PYANNOTE_REVISION=3533c8cf8e369892e6b79ff1bf80f7b0286a54ee
+ENV PYANNOTE_REVISION=${PYANNOTE_REVISION}
 RUN if [ "$DIARIZE_VARIANT" = cuda ]; then \
       pip install --no-cache-dir --timeout 300 --retries 10 pyannote.audio==4.0.7 \
         torch==2.8.0 torchaudio==2.8.0 torchcodec==0.7.0 numpy==2.2.6; fi  # torch pinned = node-base-torch cu128 layer, no second copy

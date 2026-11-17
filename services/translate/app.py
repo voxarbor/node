@@ -70,6 +70,8 @@ def _opus_version() -> str | None:
 async def health() -> dict:
     return {"status": "ok", "fallback_model": MODEL if worker.nllb_enabled() else None, "loaded": _pool is not None, "idle_ttl": IDLE_TTL,
             "busy": _busy, "queue_max": QUEUE_MAX, "engine": "opus",
+            "punctuation_model": "1-800-BAD-CODE/xlm-roberta_punctuation_fullstop_truecase",
+            "punctuation_revision": "d1769a597ce8dfaa070d436bc67d4ee761f58884",  # = punct.REVISION (not imported here)
             "opus_models_version": _opus_version(),
             "opus_pairs": sorted(d for d in (os.listdir(worker.OPUS_DIR) if os.path.isdir(worker.OPUS_DIR) else [])
                                  if os.path.isfile(os.path.join(worker.OPUS_DIR, d, "model.bin")))}

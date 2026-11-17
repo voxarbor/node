@@ -254,6 +254,20 @@ first). Real example from a test node (lists shortened with "..."; `local_ai_ver
 }
 ```
 
+## Models per service (since 0.13.2)
+
+Every service in `/capabilities.services` reports the same fields (added, nothing renamed): `model` (human name),
+`model_revision` (short HF commit, sha256 prefix of the weights, data version or tool version), `device` (cpu | cuda)
+and `engine`. Per service:
+
+| service | engine | model / model_revision | extra |
+|---|---|---|---|
+| stt | `faster-whisper (speaches)` | `STT_MODEL` / HF commit from the shared cache | |
+| tts | `holos` | HolosTTS PyTorch FP32 (+ holos-tts version) / HF commit | `stress_model` (accentuk version and mode), `verbalizer`; voices: `engines` |
+| translate | `opus` | Opus-MT tc-big pairs, CT2 int8 / `opus-models-<n>` | `punctuation_model`, `punctuation_revision` |
+| diarize | `pyannote` or `sherpa-onnx` | community-1 / HF commit, or the two ONNX models / their sha256 prefixes | `gender_model` |
+| fetch | `yt-dlp` | yt-dlp + deno / yt-dlp version | `ytdlp_version`, `deno_version` |
+
 ## Translation engine
 
 `services.translate.engine` is `opus` (Opus-MT on the CPU) and `model` names the EN->UK model. (0.13.1 had an

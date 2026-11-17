@@ -98,6 +98,15 @@ def static_info() -> dict:
     return info
 
 
+def _stt_revision() -> str | None:
+    """the Whisper model's HF commit, read from the shared hf-cache volume (mounted read-only)"""
+    ref = os.path.join(os.environ.get("HF_CACHE_DIR", "/hf"), "models--" + STT_MODEL.replace("/", "--"), "refs", "main")
+    try:
+        return open(ref).read().strip()[:12] or None
+    except OSError:
+        return None
+
+
 def updater() -> dict:
     """node-updater's status (volume updater-ctl, read-only here): {"updater": {...}} or nothing without an updater"""
     try:
@@ -119,6 +128,13 @@ def capabilities() -> dict:
                      busy=h.get("busy"), queue_max=h.get("queue_max"))
             s["device"] = DEVICES.get(name) or h.get("device") or "cpu"  # stt: speaches says nothing, so env
             if name == "tts":
+                mi = h.get("model_info") or {}
+                s.update(engine="holos", model="HolosTTS (patriotyk/HolosTTS), PyTorch FP32"
+                         + (f", holos-tts {mi['holos_tts']}" if mi.get("holos_tts") else ""),
+                         model_revision=(mi.get("holos_revision") or "")[:12] or None,
+                         stress_model=(f"accentuk {mi.get('accentuk')} ({mi.get('accentuk_mode')})"
+                                       if mi.get("stress") == "accentuk" else mi.get("stress")),
+                         verbalizer=mi.get("verbalizer"))
                 s["features"] = h.get("features", [])
                 s.update(jobs=h.get("jobs"), **{k: v for k, v in st.get("tts", {}).items()})
                 try:  # lets a coordinator check cheaply that this node's stress lexicon matches its source
@@ -138,20 +154,26 @@ def capabilities() -> dict:
                                   "/v1/text/prepare", "/v1/text/phonemize", "/v1/warmup", "/v1/voices/encode",
                                   "/v1/voices/custom"]
             elif name == "translate":
-                s.update(engine="opus", model="Helsinki-NLP/opus-mt-tc-big-en-uk (CT2 int8)")
+                s.update(engine="opus", model="Helsinki-NLP Opus-MT tc-big (en-zle and other pairs -> uk), CTranslate2 int8",
+                         model_revision=f"opus-models-{h.get('opus_models_version')}" if h.get("opus_models_version") else None,
+                         punctuation_revision=(h.get("punctuation_revision") or "")[:12] or None)
                 s.update(opus_pairs=h.get("opus_pairs"), opus_models_version=h.get("opus_models_version"), fallback_model=h.get("fallback_model"),
                          punctuation_model="1-800-BAD-CODE/xlm-roberta_punctuation_fullstop_truecase",
                          **st.get("translate", {}))
                 s["endpoints"] = ["/v1/translate", "/v1/punctuate", "/v1/languages"]
             elif name == "stt":
-                s.update(model=STT_MODEL, endpoints=["/v1/audio/transcriptions"])
+                s.update(model=STT_MODEL, endpoints=["/v1/audio/transcriptions"], engine="faster-whisper (speaches)",
+                         model_revision=_stt_revision())
             elif name == "fetch":
+                s.update(engine="yt-dlp", model="yt-dlp + deno (YouTube JS challenges)",
+                         model_revision=h.get("ytdlp_version"))
                 s.update(ytdlp_version=h.get("ytdlp_version"), deno_version=h.get("deno_version"),
                          last_bot_check=h.get("last_bot_check"), last_ok=h.get("last_ok"),
                          endpoints=["/v1/info", "/v1/subs", "/v1/audio"])
             elif name == "diarize":
                 s.update(engine=h.get("engine", "sherpa-onnx"), gender_model=h.get("gender_model", "tts-voices-0"),
                          model=h.get("model") or "pyannote segmentation-3.0 + wespeaker_en_voxceleb_resnet34_LM (sherpa-onnx)",
+                         model_revision=h.get("model_revision"),
                          sessions=h.get("sessions"), endpoints=["/v1/diarize"])
             _last[name] = (time.time(), dict(s))
         except Exception as exc:

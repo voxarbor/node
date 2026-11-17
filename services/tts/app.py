@@ -255,7 +255,21 @@ async def health() -> dict:
     loading = _warming is not None and not _warming.done()  # models are being loaded by /v1/warmup
     return {"status": "ok", "loaded": _pool is not None and not loading, "loading": loading, "idle_ttl": IDLE_TTL,
             "ui": ENABLE_UI, "jobs": JOBS.counts(), "busy": _busy, "queue_max": QUEUE_MAX, "device": _device(),
-            "features": FEATURES}
+            "features": FEATURES, "model_info": _model_info()}
+
+
+def _model_info() -> dict:
+    """the models this image carries (pinned at build time) and how it uses them: for /capabilities"""
+    import importlib.metadata as md
+
+    def ver(pkg):
+        try:
+            return md.version(pkg)
+        except md.PackageNotFoundError:
+            return None
+    return {"holos_revision": os.environ.get("HOLOS_REVISION"), "holos_tts": ver("holos-tts"),
+            "stress": worker.STRESS, "accentuk": ver("accentuk"), "accentuk_mode": worker.ACCENTUK_MODE,
+            "verbalizer": worker.VERBALIZER}
 
 
 def _device() -> str:

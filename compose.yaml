@@ -39,6 +39,7 @@ services:
       FETCH_IMAGE: ${REGISTRY:-ghcr.io/voxarbor}/node-fetch:${VOICE_CORE_TAG:-v0.13.2}
     volumes:
       - updater-ctl:/ctl:ro       # node-updater status for /capabilities.updater
+      - hf-cache:/hf:ro           # only to read the Whisper model's revision
     deploy:
       resources:
         limits: { cpus: "0.5", memory: 128m }
