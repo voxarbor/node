@@ -280,7 +280,7 @@ optional EuroLLM engine on GPU nodes; it was removed in 0.13.2: on a 12 GB card 
 `desired`, `available`, `error`, `seq`, `last_update` `{from, to, ok, at, error}`. Design and protocol:
 docs/updater.md.
 
-## Gentle mode (since 0.12.3)
+## Economy mode (`NODE_MODE=gentle`, since 0.12.3)
 
 `NODE_MODE=gentle` in `.env` (then `docker compose up -d`, or the next update) makes the node leave most of the
 machine to its owner: the connector takes one task at a time (it tells the coordinator `max_streams: 1`, so GPU work

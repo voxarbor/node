@@ -47,7 +47,7 @@ docs/connect.md); then `GATEWAY_PORT` need not be open.
 NVIDIA GPU: `COMPOSE_FILE=compose.yaml:compose.gpu.yaml` in `.env`: STT, TTS and diarization (pyannote) on the GPU. Every plain `docker compose` command
 and update keeps it (docs/gateway.md "GPU nodes").
 
-Gentle mode: `NODE_MODE=gentle` (one task at a time, half the CPU threads) leaves most of the machine to its owner.
+Economy mode: `NODE_MODE=gentle` (one task at a time, half the CPU threads) leaves most of the machine to its owner.
 
 Automatic updates (since 0.13.0): the `updater` service updates the node from signed releases only, in an idle
 window, and rolls back on failure. `UPDATER_MODE=auto` (default) | `notify` | `off` in `.env` (docs/updater.md).
@@ -56,7 +56,7 @@ Size threads and CPU limits to the machine in `.env`. Models load on demand and 
 
 ## Docs
 
-- `docs/install.md` (Ukrainian): install, update, GPU, gentle mode, cleanup.
+- `docs/install.md` (Ukrainian): install, update, GPU, economy mode, cleanup.
 - `docs/updater.md`: automatic updates: security, protocol, rollback.
 - `docs/gateway.md`: gateway paths, `/capabilities` contract (schema 1), images, operations.
 - `docs/API.md`: the TTS API (parameters, jobs, SSE, lexicon).
