@@ -132,13 +132,17 @@ class Sampler(threading.Thread):
 
 class Probe(threading.Thread):
     """What a user's program feels: one fixed single-thread task (pure Python loop) every 3 s, its time in ms.
-    Compared with the idle phase it shows how much slower other programs on the machine get."""
+    Compared with the idle phase it shows how much slower other programs on the machine get. A 0.5 s untimed spin
+    before each measurement takes the core out of its idle clock, otherwise power saving makes idle look slower."""
     def __init__(self):
         super().__init__(daemon=True)
         self.samples, self.stop_ = [], False
 
     def run(self):
         while not self.stop_:
+            t0 = time.perf_counter()
+            while time.perf_counter() - t0 < 0.5:  # untimed spin: let the CPU leave its idle clock first (laptops)
+                pass
             t0 = time.perf_counter()
             x = 0
             for i in range(1_000_000):
