@@ -254,18 +254,10 @@ first). Real example from a test node (lists shortened with "..."; `local_ai_ver
 }
 ```
 
-## Translation engine (since 0.13.1)
+## Translation engine
 
-`services.translate.engine`: `llm` (EuroLLM-9B-Instruct-2512 Q4_K_M via llama.cpp on the GPU, EN->UK; nodes with
-`TRANSLATE_GPU=1`, GPUs of 12 GB+) or `opus` (Opus-MT on the CPU). Also `model`, `device` (`cuda` for llm),
-`llm_loaded`, `llm_fallback` (why the last request fell back to Opus-MT, e.g. too little free VRAM). The response's
-`model` says what translated it: `llm:eurollm-9b-instruct-2512-q4_k_m`, or with `+opus:…(N)` when N sentences failed
-the output checks (placeholders N0/N1, length) and were re-translated with Opus-MT. The request contract is unchanged.
-On cards below 16 GB (`llm_shared_card: true`) the LLM runs only while no other GPU model (STT, TTS,
-diarize) is loaded, unloads after each batch and yields when free VRAM drops below 0.5 GB: on WSL/Windows an
-oversubscribed GPU spills into system RAM and slows every service 3-11x instead of failing. So on such nodes EN->UK
-goes to the LLM for batch translation of a whole video while the GPU is otherwise idle, and to Opus-MT during live
-viewing. A coordinator should prefer `engine: llm` nodes for EN->UK batch translation.
+`services.translate.engine` is `opus` (Opus-MT on the CPU) and `model` names the EN->UK model. (0.13.1 had an
+optional EuroLLM engine on GPU nodes; it was removed in 0.13.2: on a 12 GB card it took nearly the whole GPU.)
 
 ## Updater (since 0.13.0)
 

@@ -16,7 +16,6 @@ from fastapi import Depends, FastAPI, HTTPException, Request
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from pydantic import BaseModel, Field, model_validator
 
-import llm
 import worker
 
 API_KEY = os.environ["API_KEY"]
@@ -54,10 +53,9 @@ async def _reaper() -> None:
 @app.on_event("startup")
 async def _start() -> None:
     asyncio.create_task(_reaper())
-    if llm.ENABLED:  # GPU node with >= 12 GB VRAM: EuroLLM for EN->UK (llm.py); model file once into the volume
-        import threading
-        threading.Thread(target=llm.download, daemon=True).start()
-        threading.Thread(target=llm.reaper, daemon=True).start()
+    # 0.13.1 kept an EuroLLM GGUF (5.6 GB) in this volume; LLM translation was removed in 0.13.2 (owner): free it
+    import shutil
+    shutil.rmtree("/cache/llm", ignore_errors=True)
 
 
 def _opus_version() -> str | None:
@@ -71,7 +69,7 @@ def _opus_version() -> str | None:
 @app.get("/health")
 async def health() -> dict:
     return {"status": "ok", "fallback_model": MODEL if worker.nllb_enabled() else None, "loaded": _pool is not None, "idle_ttl": IDLE_TTL,
-            "busy": _busy, "queue_max": QUEUE_MAX, **llm.health(),
+            "busy": _busy, "queue_max": QUEUE_MAX, "engine": "opus",
             "opus_models_version": _opus_version(),
             "opus_pairs": sorted(d for d in (os.listdir(worker.OPUS_DIR) if os.path.isdir(worker.OPUS_DIR) else [])
                                  if os.path.isfile(os.path.join(worker.OPUS_DIR, d, "model.bin")))}
@@ -188,22 +186,9 @@ async def translate(req: TranslateRequest, request: Request) -> dict:
     if not sentences or source == target:
         translated, model = sentences, None  # nothing to do, keep the input
     else:
-        got = None
-        if llm.ENABLED and source == "eng_Latn" and target == "ukr_Cyrl":
-            got = await asyncio.to_thread(llm.translate, sentences)
         try:
-            if got is None:
-                translated, model = await _run(worker.translate, sentences, source, target, req.beam_size,
-                                                request=request)
-            else:
-                translated, model = got, "llm:" + llm.MODEL_NAME
-                bad = [i for i, t in enumerate(got) if t is None]
-                if bad:  # outputs that failed the checks (placeholders, length): Opus-MT for just those
-                    fixed, opus = await _run(worker.translate, [sentences[i] for i in bad], source, target,
-                                             req.beam_size, request=request)
-                    for i, t in zip(bad, fixed):
-                        translated[i] = t
-                    model += f"+{opus}({len(bad)})"
+            translated, model = await _run(worker.translate, sentences, source, target, req.beam_size,
+                                            request=request)
         except ValueError as exc:  # e.g. a pair that needs the opt-in NLLB
             raise HTTPException(422, str(exc))
     it = iter(translated)

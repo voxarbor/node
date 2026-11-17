@@ -48,7 +48,6 @@ jobs:
           - { service: tts, image: tts, args: "BASE_IMAGE=ghcr.io/voxarbor/node-base-torch:2.8.0-cpu-1" }
           - { service: tts, image: tts-cuda, args: "BASE_IMAGE=ghcr.io/voxarbor/node-base-torch:2.8.0-cu128-1" }   # GPU nodes
           - { service: translate, image: translate, args: "" }
-          - { service: translate, image: translate-cuda, args: "BASE_IMAGE=ghcr.io/ggml-org/llama.cpp@sha256:d68ec493c0ff9105ddfe2e909fff304117bc6e1fffbbd8d94182bd455983c264" }   # GPU: EuroLLM via llama.cpp server-cuda b12429
           - { service: diarize, image: diarize, args: "BASE_IMAGE=ghcr.io/voxarbor/node-base-av:1" }
           - { service: diarize, image: diarize-cuda, args: "BASE_IMAGE=ghcr.io/voxarbor/node-base-torch:2.8.0-cu128-1\nDIARIZE_VARIANT=cuda" }   # GPU: pyannote
           - { service: node-info, image: node-info, args: "" }

@@ -138,14 +138,7 @@ def capabilities() -> dict:
                                   "/v1/text/prepare", "/v1/text/phonemize", "/v1/warmup", "/v1/voices/encode",
                                   "/v1/voices/custom"]
             elif name == "translate":
-                # engine: "llm" (EuroLLM on the GPU, EN->UK) or "opus" (Opus-MT on the CPU); llm falls back to opus
-                # per request when VRAM is short, so the coordinator should prefer engine=llm nodes for EN->UK
-                llm_on = h.get("engine") == "llm"
-                s.update(engine=h.get("engine", "opus"),
-                         model=h.get("llm_model") if llm_on else "Helsinki-NLP/opus-mt-tc-big-en-uk (CT2 int8)",
-                         llm_loaded=h.get("llm_loaded"), llm_fallback=h.get("llm_last_fallback"))
-                if llm_on:
-                    s["device"] = "cuda"
+                s.update(engine="opus", model="Helsinki-NLP/opus-mt-tc-big-en-uk (CT2 int8)")
                 s.update(opus_pairs=h.get("opus_pairs"), opus_models_version=h.get("opus_models_version"), fallback_model=h.get("fallback_model"),
                          punctuation_model="1-800-BAD-CODE/xlm-roberta_punctuation_fullstop_truecase",
                          **st.get("translate", {}))

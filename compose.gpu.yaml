@@ -1,5 +1,5 @@
-# GPU node (NVIDIA, CUDA 12.8+ driver, nvidia-container-toolkit): STT, TTS, diarize (and with TRANSLATE_GPU=1 the EN->UK
-# translation) on the GPU, the rest stays on the CPU.
+# GPU node (NVIDIA, CUDA 12.8+ driver, nvidia-container-toolkit): STT, TTS and diarize on the GPU, the rest stays on
+# the CPU.
 #   docker compose -f compose.yaml -f compose.gpu.yaml --env-file .env up -d     (+ compose.ui.yaml for the web UI)
 # Check first:  docker run --rm --gpus all ubuntu:24.04 nvidia-smi
 x-gpu: &gpu
@@ -37,21 +37,6 @@ services:
           devices:
             - { driver: nvidia, count: all, capabilities: [gpu, utility, compute] }
 
-  # EN->UK with EuroLLM-9B (llama.cpp, Q4_K_M) only on GPUs with >= 12 GB VRAM: the installer sets TRANSLATE_GPU=1
-  # in .env then. Without it translate stays the CPU image with Opus-MT. The model (5.6 GB) downloads once into the
-  # translate volume and sits in VRAM only while translating (unloaded after 60 s idle); when STT/TTS leave too
-  # little VRAM free, a request waits up to 30 s and then uses Opus-MT.
-  translate:
-    image: ${REGISTRY:-ghcr.io/voxarbor}/node-translate${TRANSLATE_GPU:+-cuda}:${VOICE_CORE_TAG:-v0.13.2}
-    environment:
-      TRANSLATE_ENGINE: ${TRANSLATE_GPU:+llm}
-    deploy:
-      resources:
-        limits: { memory: 8g }
-        reservations:
-          devices:
-            - { driver: nvidia, count: all, capabilities: [gpu, utility, compute] }
-
   node-info:
     <<: *gpu   # only to read the GPU name / VRAM / load with nvidia-smi
     environment:
@@ -59,4 +44,3 @@ services:
       STT_IMAGE: ${STT_GPU_IMAGE:-ghcr.io/speaches-ai/speaches:0.8.3-cuda-12.6.3}
       DIARIZE_IMAGE: ${REGISTRY:-ghcr.io/voxarbor}/node-diarize-cuda:${VOICE_CORE_TAG:-v0.13.2}
       TTS_IMAGE: ${REGISTRY:-ghcr.io/voxarbor}/node-tts-cuda:${VOICE_CORE_TAG:-v0.13.2}
-      TRANSLATE_IMAGE: ${REGISTRY:-ghcr.io/voxarbor}/node-translate${TRANSLATE_GPU:+-cuda}:${VOICE_CORE_TAG:-v0.13.2}

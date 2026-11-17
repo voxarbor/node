@@ -16,7 +16,7 @@ first voiced phrase of a video comes after ~42 s; with an NVIDIA GPU (RTX 5070 T
 |---|---|
 | `/tts/v1/audio/speech`, `/tts/v1/audio/speech/stream`, `/tts/v1/jobs` | Ukrainian TTS (HolosTTS; StyleTTS2 opt-in): whole lectures, streaming (first sound ~1.5 s warm), jobs with history and subtitles; Markdown/URL cleanup, English names, numbers, Roman numerals, initials, brackets, stress lexicon |
 | `/stt/v1/audio/transcriptions` | Whisper large-v3-turbo (OpenAI-compatible) |
-| `/translate/v1/translate`, `/translate/v1/punctuate` | → Ukrainian: Opus-MT (on GPUs of 12 GB+ EN→UK with EuroLLM-9B; NLLB-200 opt-in), punctuation + capitals + sentences for raw captions |
+| `/translate/v1/translate`, `/translate/v1/punctuate` | → Ukrainian: Opus-MT (NLLB-200 opt-in), punctuation + capitals + sentences for raw captions |
 | `/diarize/v1/diarize` | who speaks when, each speaker's gender (pyannote community-1 on a GPU, sherpa-onnx on a CPU) |
 | `/fetch/v1/info`, `/fetch/v1/subs`, `/fetch/v1/audio` | optional (`COMPOSE_PROFILES=fetch`): YouTube metadata, subtitles and audio fetched from this node's IP |
 | `/capabilities` | what this node runs (schema 1) |
@@ -44,8 +44,7 @@ Whisper model. Then every request carries `Authorization: Bearer <NODE_TOKEN>` t
 Behind NAT / for a public coordinator: the node can dial out instead (`COORDINATOR_URL` + `NODE_JOIN_CODE` in `.env`,
 docs/connect.md); then `GATEWAY_PORT` need not be open.
 
-NVIDIA GPU: `COMPOSE_FILE=compose.yaml:compose.gpu.yaml` in `.env`: STT, TTS and diarization (pyannote) on the GPU;
-with `TRANSLATE_GPU=1` on GPUs of 12 GB+ also EN→UK translation with EuroLLM-9B. Every plain `docker compose` command
+NVIDIA GPU: `COMPOSE_FILE=compose.yaml:compose.gpu.yaml` in `.env`: STT, TTS and diarization (pyannote) on the GPU. Every plain `docker compose` command
 and update keeps it (docs/gateway.md "GPU nodes").
 
 Gentle mode: `NODE_MODE=gentle` (one task at a time, half the CPU threads) leaves most of the machine to its owner.

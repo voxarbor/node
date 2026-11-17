@@ -19,8 +19,7 @@ def digest(ref):
     return ref.rsplit(":", 1)[0] + "@" + json.loads(out)["digest"]
 
 
-refs = sorted(set(images("compose.yaml") + images("compose.yaml", "compose.gpu.yaml")
-                 + images("compose.yaml", "compose.gpu.yaml", extra={"TRANSLATE_GPU": "1"})))
+refs = sorted(set(images("compose.yaml") + images("compose.yaml", "compose.gpu.yaml")))
 opus = [r for r in refs if "/node-models-opus:" in r]
 man = {
     "version": tag,
