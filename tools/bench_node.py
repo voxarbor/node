@@ -12,6 +12,9 @@ Phases (each sampled every second: node CPU % (all its containers, % of the whol
   tts        warmup (model load time), stream: time to first audio, then whole file -> RTF
   first      "time to the first spoken phrase": first 30 s of the clip -> stt -> translate -> tts stream first byte
   together   stt + diarize + translate + tts at the same time -> each one's time and RTF under load
+  impact     what the owner's own programs get: a CPU probe (all cores, 10 s) and, on a GPU node, a CUDA probe
+             (fp16 matmul, 10 s, in the node's own tts image) first with the node idle, then while the node runs the
+             "together" load -> "programs keep N % of their CPU / GPU speed"
 Result: JSON with every sample and a summary table (Markdown) printed at the end.
 """
 import argparse, io, json, os, re, subprocess, threading, time, urllib.error, urllib.request, uuid, wave
@@ -23,7 +26,7 @@ ap.add_argument("--audio", required=True)
 ap.add_argument("--clip", type=float, default=180, help="seconds of --audio used for stt/diarize")
 ap.add_argument("--idle", type=float, default=60)
 ap.add_argument("--voice", default="male")
-ap.add_argument("--phases", default="idle,stt,translate,diarize,tts,first,together")
+ap.add_argument("--phases", default="idle,stt,translate,diarize,tts,first,together,impact")
 ap.add_argument("--out", default="bench.json")
 a = ap.parse_args()
 TOKEN = os.environ["NODE_TOKEN"]
@@ -248,6 +251,54 @@ def tts_file(text):
             "bytes": len(b)}
 
 
+def _cpu_worker(sec, q):
+    n, t0 = 0, time.perf_counter()
+    while time.perf_counter() - t0 < sec:
+        x = 0
+        for i in range(20000):
+            x += i * i
+        n += 1
+    q.put(n)
+
+
+def cpu_probe(sec=10):
+    """all cores busy with a fixed pure-Python loop: total loops per second (a stand-in for the owner's programs)"""
+    import multiprocessing
+    mp = multiprocessing.get_context("fork")  # the script body must not run again in the workers
+    q = mp.Queue()
+    ps = [mp.Process(target=_cpu_worker, args=(sec, q)) for _ in range(os.cpu_count() or 1)]
+    for x in ps:
+        x.start()
+    total = sum(q.get() for _ in ps)
+    for x in ps:
+        x.join()
+    return total / sec
+
+
+GPU_PROBE = ("import torch,time\n"
+             "a=torch.randn(4096,4096,device='cuda',dtype=torch.float16)\n"
+             "for _ in range(10): a@a\n"
+             "torch.cuda.synchronize(); n=0; t=time.time()\n"
+             "while time.time()-t<10:\n"
+             "    for _ in range(10): a@a\n"
+             "    torch.cuda.synchronize(); n+=10\n"
+             "print(n*2*4096**3/(time.time()-t)/1e12)")
+
+
+def gpu_probe():
+    """CUDA fp16 matmul TFLOPS for 10 s, in the node's tts image (torch present), None on a CPU node"""
+    img = SVC.get("tts", {}).get("image")
+    if not res["host"].get("gpu") or not img:
+        return None
+    r = subprocess.run(["docker", "run", "--rm", "--gpus", "all", "--entrypoint", "python", img, "-c", GPU_PROBE],
+                       capture_output=True, text=True, timeout=300)
+    try:
+        return round(float(r.stdout.strip().splitlines()[-1]), 1)
+    except (ValueError, IndexError):
+        print("gpu probe failed:", r.stderr[-300:], flush=True)
+        return None
+
+
 phases = a.phases.split(",")
 uk_text = "Це тестовий текст для перевірки швидкості синтезу. Вузол читає його звичайним голосом, без поспіху."
 transcript = None
@@ -323,6 +374,37 @@ if "together" in phases:
                      "translate_s": round(sum(trs) / len(trs), 2), "tts_first_audio": tst["first_audio_s"],
                      "tts_rtf": tfi["rtf"], "wall_s": round(time.monotonic() - t_together, 1),
                      "mode": "serial (gentle)" if serial else "parallel"}
+if "impact" in phases:
+    phase("impact_idle")
+    for _ in range(240):  # the node must be quiet for the baseline
+        h = json.loads(req("GET", "/tts/health", timeout=30)[1])
+        if not h.get("busy") and not sum((h.get("jobs") or {}).values()):
+            break
+        time.sleep(1)
+    base_cpu, base_gpu = cpu_probe(), gpu_probe()
+    phase("impact_load")
+    serial = (caps.get("node") or {}).get("mode") == "gentle"
+    segs = transcript or [uk_text]
+    stop_load = threading.Event()
+
+    def load():  # the node keeps working for the whole probe: stt + diarize + translate + tts, again and again
+        with ThreadPoolExecutor(1 if serial else 4) as ex:
+            while not stop_load.is_set():
+                fs = [ex.submit(stt, clip), ex.submit(diarize, clip), ex.submit(translate, segs),
+                      ex.submit(tts_file, text)]
+                for f in fs:
+                    f.result()
+    th = threading.Thread(target=load, daemon=True)
+    th.start()
+    time.sleep(20)  # models loaded, all services busy
+    load_cpu, load_gpu = cpu_probe(), gpu_probe()
+    stop_load.set()
+    R["impact"] = {"cpu_keep_pct": round(100 * load_cpu / base_cpu), "cpu_idle_loops_s": round(base_cpu),
+                   "cpu_load_loops_s": round(load_cpu)}
+    if base_gpu and load_gpu:
+        R["impact"].update(gpu_keep_pct=round(100 * load_gpu / base_gpu), gpu_idle_tflops=base_gpu,
+                           gpu_load_tflops=load_gpu)
+    th.join()
 phase("end"); time.sleep(1.5)
 smp.stop_ = True; smp.join(); probe.stop_ = True; probe.join()
 for p in dict.fromkeys(s["phase"] for s in smp.samples):
@@ -338,15 +420,18 @@ json.dump(res, open(a.out, "w"), indent=1, ensure_ascii=False)
 # ---------------------------------------------------------------- table
 print(f"\n### {res['product']} {res['version']} · {res['date']} · {res['host']['cpu']} ({res['host']['cpus']} CPU), "
       f"{res['host']['mem_gb']} GB RAM{' · ' + res['host'].get('gpu', '') if res['host'].get('gpu') else ''}")
-print("| phase | result | node CPU avg/max % | host CPU avg/max % | node RAM max GB | GPU util avg/max % | VRAM max GB | GPU °C max | user task slowdown |")
-print("|---|---|---|---|---|---|---|---|---|")
+print("| phase | result | node CPU avg/max % | host CPU avg/max % | node RAM max GB | GPU util avg/max % | VRAM max GB | GPU °C max |")
+print("|---|---|---|---|---|---|---|---|")
 show = {"idle": lambda: f"loaded {R.get('idle_loaded')}",
         "stt": lambda: f"cold RTF {R['stt_cold']['rtf']}, warm RTF {R['stt_warm']['rtf']}",
         "translate": lambda: f"{R['translate_warm']['sentences_per_s']} sent/s (cold {R['translate_cold']['seconds']} s)",
         "diarize": lambda: f"RTF {R['diarize']['rtf']}, {R['diarize']['speakers']} speakers",
         "tts": lambda: f"load {R['tts_load']['seconds']} s, first audio {R['tts_stream']['first_audio_s']} s, RTF {R['tts_file']['rtf']}",
         "first": lambda: f"first phrase {R['first_phrase']['total_s']} s",
-        "together": lambda: ", ".join(f"{k} {v}" for k, v in R["together"].items())}
+        "together": lambda: ", ".join(f"{k} {v}" for k, v in R["together"].items()),
+        "impact_idle": lambda: "baseline for impact_load",
+        "impact_load": lambda: (f"owner's programs keep {R['impact']['cpu_keep_pct']} % CPU speed"
+                                + (f", {R['impact']['gpu_keep_pct']} % GPU speed" if "gpu_keep_pct" in R["impact"] else ""))}
 for p, s in res["phases"].items():
     g = s.get("gpu", {})
     try:
@@ -354,6 +439,5 @@ for p, s in res["phases"].items():
     except Exception:  # noqa: BLE001
         r = "?"
     print(f"| {p} | {r} | {s['node_cpu_avg']}/{s['node_cpu_max']} | {s['host_cpu_avg']}/{s['host_cpu_max']} | {s['node_mem_max_gb']} | "
-          f"{g.get('util_avg', '–')}/{g.get('util_max', '–')} | {g.get('vram_max_gb', '–')} | {g.get('temp_max', '–')} | "
-          f"{'x' + str(round(s['probe_ms_median'] / base, 2)) if base and s.get('probe_ms_median') else '–'} |")
+          f"{g.get('util_avg', '–')}/{g.get('util_max', '–')} | {g.get('vram_max_gb', '–')} | {g.get('temp_max', '–')} |")
 print(f"\nJSON: {a.out}")
