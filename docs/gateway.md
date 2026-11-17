@@ -273,6 +273,9 @@ and `engine`. Per service:
 
 ## Translation engine
 
+Placeholders (since 0.13.6): a sentence whose output lost or doubled an `N0`/`N1`… token is translated again with a
+wider search (beam 6, 6 hypotheses) and the first hypothesis that keeps them all is used (our sets: 140/140).
+
 `services.translate.engine` is `opus` (Opus-MT on the CPU) and `model` names the EN->UK model. (0.13.1 had an
 optional EuroLLM engine on GPU nodes; it was removed in 0.13.2: on a 12 GB card it took nearly the whole GPU.)
 

@@ -7,6 +7,7 @@ model must copy those tokens exactly once and build grammatical Ukrainian around
 glossary term is in the English and its Ukrainian form (any ending) in the Ukrainian, a copy with both replaced by
 N0 (N1 for a second term) is added; the same for Latin names the reference keeps as they are ("Crainer", "SMP").
 dev and test get such placeholder variants as separate files (dev_ph.tsv, test_ph.tsv) for the 100 % check.
+An optional replay.tsv (general sentences + the current model's own translations) is mixed in unchanged.
 """
 import csv, os, random, re, sys
 
@@ -72,6 +73,10 @@ def write(name, rows):
 train = read("train.tsv")
 ph = [p for p in (placeholder(en, uk) for en, uk in train) if p]
 aug = train + ph * 2  # placeholder pairs twice: a small, important behaviour
+# general-language replay (optional replay.tsv: general English sentences translated by the CURRENT model itself):
+# keeps the old behaviour on long formal text while the model learns our domain (v1 without it lost 2-3 chrF there)
+replay = read("replay.tsv")
+aug += replay
 random.shuffle(aug)
 write("train_aug.tsv", aug)
 for name in ("dev", "test", "test_random250", "gold"):
@@ -79,5 +84,5 @@ for name in ("dev", "test", "test_random250", "gold"):
     write(f"{name}.tsv", rows)
     if name in ("dev", "test"):
         write(f"{name}_ph.tsv", [p for p in (placeholder(en, uk) for en, uk in rows) if p])
-print(f"train {len(train)} + {len(ph)} placeholder pairs (x2) = {len(aug)}; "
+print(f"train {len(train)} + {len(ph)} placeholder pairs (x2) + {len(replay)} replay = {len(aug)}; "
       + ", ".join(f"{n} {sum(1 for _ in open(os.path.join(OUT, n)))}" for n in sorted(os.listdir(OUT)) if n.endswith('.tsv')))

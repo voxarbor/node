@@ -30,6 +30,7 @@ LANGS = {
 }
 ISO = {v: k for k, v in LANGS.items()}
 MAX_TOKENS = 400
+PH = re.compile(r"\bN\d+\b")  # glossary placeholders in /translate input
 MAX_LOADED = int(os.environ.get("TRANSLATE_MAX_MODELS", "3"))
 THREADS = (lambda n: max(1, n // 2) if os.environ.get("NODE_MODE") == "gentle" else n)(int(os.environ.get("TRANSLATE_THREADS", "4")))  # NODE_MODE=gentle: half
 _models: "OrderedDict[str, tuple]" = OrderedDict()  # name -> (translator, encode, decode), least recently used first
@@ -127,4 +128,18 @@ def translate(texts: list[str], source: str, target: str, beam_size: int) -> tup
     results = tr.translate_batch(batch, target_prefix=None if opus else [[target]] * len(batch), beam_size=beam_size,
                                  max_decoding_length=MAX_TOKENS, max_batch_size=16, repetition_penalty=1.1)
     out = [decode([t for t in r.hypotheses[0] if t != target]).strip() for r in results]
+    # placeholders (N0, N1 … = glossary terms the coordinator puts back) must survive exactly once: a sentence that
+    # lost or doubled one gets a second, wider search; the first hypothesis that keeps them all wins
+    bad = [i for i, (s, o) in enumerate(zip(texts, out)) if sorted(PH.findall(s)) != sorted(PH.findall(o))]
+    if bad:
+        again = tr.translate_batch([batch[i] for i in bad], target_prefix=None if opus else [[target]] * len(bad),
+                                   beam_size=6, num_hypotheses=6, max_decoding_length=MAX_TOKENS,
+                                   repetition_penalty=1.1)
+        for i, r in zip(bad, again):
+            want = sorted(PH.findall(texts[i]))
+            for hyp in r.hypotheses:
+                cand = decode([t for t in hyp if t != target]).strip()
+                if sorted(PH.findall(cand)) == want:
+                    out[i] = cand
+                    break
     return out, name
