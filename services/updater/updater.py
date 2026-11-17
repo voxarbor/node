@@ -475,6 +475,9 @@ class Updater:
             self.idle_since = None
             return
         # cur may be "latest" (nodes of the coordinator's old installer): any signed release then pins it
+        if not ver(cur):
+            self.st.set(warnings=[f"VOICE_CORE_TAG={cur} in .env is not a release version: "
+                                  + ("updating to the coordinator's " + tag if ver(tag) else "waiting for the coordinator's version")])
         if not ver(tag) or tag == cur:
             self.st.set(state="idle", available=None)
             self.repair(cur)
