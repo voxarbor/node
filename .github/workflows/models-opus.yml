@@ -5,6 +5,9 @@ on:
   workflow_dispatch:
     inputs:
       tag: { description: "image tag", default: "1" }
+      base: { description: "overlay mode: earlier models tag to start from (empty = convert all from Hugging Face)", default: "" }
+      overlay_url: { description: "overlay mode: tgz with replaced pair folders (e.g. en-zle/)", default: "" }
+      overlay_sha256: { description: "overlay mode: sha256 of that tgz", default: "" }
 permissions:
   contents: read
   packages: write
@@ -13,7 +16,14 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
+      - name: overlay (replace some pairs of an earlier models image)
+        if: inputs.base != ''
+        run: |
+          mkdir -p ctx/opus-mt && curl -fsSL --retry 5 -o o.tgz "${{ inputs.overlay_url }}"
+          echo "${{ inputs.overlay_sha256 }}  o.tgz" | sha256sum -c
+          tar xzf o.tgz -C ctx/opus-mt && cp services/models-opus/Dockerfile.overlay ctx/Dockerfile && du -sh ctx/opus-mt/*
       - name: convert
+        if: inputs.base == ''
         run: |
           mkdir -p ctx/opus-mt
           docker run --rm -v "$PWD/ctx:/out" python:3.12.12-slim sh -ec '
@@ -32,4 +42,5 @@ jobs:
           context: ctx
           push: true
           tags: ghcr.io/voxarbor/node-models-opus:${{ inputs.tag }}
+          build-args: BASE=ghcr.io/voxarbor/node-models-opus:${{ inputs.base || '1' }}
           labels: org.opencontainers.image.source=https://github.com/voxarbor/node

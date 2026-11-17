@@ -1,0 +1,5 @@
+# models-opus:<n> = an earlier models image with some pairs replaced (e.g. tag 2: en-zle fine-tuned, see NOTICE and
+# tools/opus_finetune). Build context: the replaced pair folders under opus-mt/ (checked by sha256 in the workflow).
+ARG BASE=ghcr.io/voxarbor/node-models-opus:1
+FROM ${BASE}
+COPY opus-mt /models/opus-mt
