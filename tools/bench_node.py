@@ -83,11 +83,15 @@ def wav_slice(path, start, dur):
 
 
 # ---------------------------------------------------------------- sampling
+import shutil as _sh
+SMI = _sh.which("nvidia-smi") or ("/usr/lib/wsl/lib/nvidia-smi" if os.path.exists("/usr/lib/wsl/lib/nvidia-smi") else None)
+
+
 class Sampler(threading.Thread):
     def __init__(self):
         super().__init__(daemon=True)
         self.samples, self.phase, self.stop_ = [], "start", False
-        self.gpu = subprocess.run(["sh", "-c", "command -v nvidia-smi"], capture_output=True).returncode == 0
+        self.gpu = bool(SMI)
 
     @staticmethod
     def _cpu():
@@ -122,7 +126,7 @@ class Sampler(threading.Thread):
             kb = lambda k: int(mi[k].split()[0])  # noqa: E731
             s["host_mem_used_gb"] = round((kb("MemTotal") - kb("MemAvailable")) / 1024 ** 2, 2)
             if self.gpu:
-                g = subprocess.run(["nvidia-smi", "--query-gpu=utilization.gpu,memory.used,temperature.gpu,power.draw",
+                g = subprocess.run([SMI, "--query-gpu=utilization.gpu,memory.used,temperature.gpu,power.draw",
                                     "--format=csv,noheader,nounits"], capture_output=True, text=True).stdout.split(",")
                 try:
                     s["gpu"] = {"util": float(g[0]), "vram_gb": round(float(g[1]) / 1024, 2), "temp": float(g[2]),
@@ -190,7 +194,7 @@ res = {"product": caps.get("product"), "mode": (caps.get("node") or {}).get("mod
        "mem_gb": round(int(open("/proc/meminfo").readline().split()[1]) / 1024 ** 2, 1)},
        "devices": {k: v.get("device") for k, v in SVC.items()}, "results": {}, "phases": {}}
 if Sampler().gpu:
-    res["host"]["gpu"] = subprocess.run(["nvidia-smi", "--query-gpu=name,memory.total,driver_version", "--format=csv,noheader"],
+    res["host"]["gpu"] = subprocess.run([SMI, "--query-gpu=name,memory.total,driver_version", "--format=csv,noheader"],
                                         capture_output=True, text=True).stdout.strip()
 R = res["results"]
 clip, clip_s = wav_slice(a.audio, 0, a.clip)

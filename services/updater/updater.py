@@ -182,6 +182,57 @@ class Status:
 
 
 # ---------------------------------------------------------------- release ----------------------------------------
+TRUSTED_ROOT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "trusted_root.json")
+
+
+class SignatureError(RuntimeError):
+    """the release's signature could not be checked (network) or is not valid"""
+
+
+def verify_signature(blob, bundle, tag):
+    """cosign keyless: our release workflow at that tag. First offline with the trusted root built into this image,
+    then (a root too old for a newer certificate) through live TUF, 3 tries with a pause; no fallback to unsigned."""
+    identity = f"https://github.com/{REPO}/{WORKFLOW}@refs/tags/{tag}"
+    base = ["cosign", "verify-blob", blob, "--bundle", bundle, "--certificate-identity", identity,
+            "--certificate-oidc-issuer", OIDC]
+    if os.path.exists(TRUSTED_ROOT):
+        r = run(base + ["--trusted-root", TRUSTED_ROOT], check=False, timeout=120)
+        if r.returncode == 0:
+            return
+        err = (r.stderr or r.stdout).strip()
+        if INVALID.search(err):  # wrong identity / signature / digest: a newer trust root would not change that
+            log("signature check failed:", err[-500:])
+            raise SignatureError("invalid: " + err[-200:])
+        log("offline signature check failed, trying live TUF:", err[-200:])
+    last = ""
+    for attempt in range(3):
+        r = run(base, check=False, timeout=300)
+        if r.returncode == 0:
+            return
+        last = (r.stderr or r.stdout).strip()
+        if not NETWORK.search(last):
+            break  # a real verification failure: retrying will not help
+        time.sleep(20 * (attempt + 1))
+    log("signature check failed:", last[-500:])
+    raise SignatureError(("network: " if NETWORK.search(last) else "invalid: ") + last[-200:])
+
+
+INVALID = re.compile(r"expected SAN|expected issuer|invalid signature|signature.*(mismatch|did not verify)|digest", re.I)
+NETWORK = re.compile(r"connection reset|timed out|timeout|no such host|connection refused|TUF|tls|EOF|unreachable", re.I)
+
+
+def human(exc) -> str:
+    """a short Ukrainian line for the admin panel; the full error goes to the log"""
+    t = str(exc)
+    if isinstance(exc, SignatureError) and t.startswith("network"):
+        return "Не вдалося перевірити підпис оновлення: немає зв'язку з Sigstore, повторю пізніше"
+    if isinstance(exc, SignatureError):
+        return "Підпис оновлення недійсний: оновлення не встановлено"
+    if NETWORK.search(t) or "urlopen" in t or "Read timed out" in t:
+        return "Немає зв'язку з GitHub або реєстром образів, повторю пізніше"
+    return t[:200]
+
+
 def fetch_release(tag, dest):
     """Downloads the release's node files + manifest, verifies the signature (cosign keyless, our workflow on that
     tag) and every file's sha256. Returns the manifest."""
@@ -198,10 +249,7 @@ def fetch_release(tag, dest):
 
     get("manifest.json")
     get("manifest.json.sigstore.json")
-    identity = f"https://github.com/{REPO}/{WORKFLOW}@refs/tags/{tag}"
-    run(["cosign", "verify-blob", os.path.join(dest, "manifest.json"), "--bundle",
-         os.path.join(dest, "manifest.json.sigstore.json"), "--certificate-identity", identity,
-         "--certificate-oidc-issuer", OIDC], timeout=300)
+    verify_signature(os.path.join(dest, "manifest.json"), os.path.join(dest, "manifest.json.sigstore.json"), tag)
     man = read_json(os.path.join(dest, "manifest.json"))
     if man.get("version") != tag:
         raise RuntimeError(f"manifest is for {man.get('version')}, not {tag}")
@@ -526,13 +574,17 @@ class Updater:
                      timeout=1800)
             log("prune after self-replacement:", (pr.stdout or pr.stderr).strip().splitlines()[-1:] or "")
             self.st.set(pending_self=None)
+        errors = 0
         while True:
             try:
                 self.step()
+                errors = 0
             except Exception as exc:  # noqa: BLE001
-                log("error:", exc)
-                self.st.set(state="error", error=str(exc)[:300])
-                time.sleep(60)
+                errors += 1
+                pause = min(900, 60 * 2 ** (errors - 1))  # 1, 2, 4, 8, 15 min
+                log(f"error (retry in {pause} s):", exc)
+                self.st.set(state="error", error=f"{human(exc)} (повтор через {pause // 60} хв)")
+                time.sleep(pause)
             time.sleep(15)
 
 

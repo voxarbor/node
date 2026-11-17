@@ -53,7 +53,8 @@
 1. Завантажує з GitHub-релізу voxarbor/node файл `manifest.json` і його підпис `manifest.json.sigstore.json`.
 2. Перевіряє підпис (cosign keyless, Sigstore). Підписувачем має бути саме workflow
    `.github/workflows/release.yml` цього репозиторію на цьому тезі. Без дійсного підпису оновлення не відбувається:
-   запасного шляху немає.
+   запасного шляху немає. Корінь довіри Sigstore вбудовано в образ оновлювача (оновлюється з кожним його релізом), тож
+   перевірка працює й тоді, коли сервери Sigstore недоступні.
 3. Звіряє sha256 кожного файлу вузла (`compose.yaml`, `compose.gpu.yaml`, `Caddyfile`, `prune.sh`) з маніфестом.
 4. Завантажує образи лише за digest із маніфесту і лише з дозволених репозиторіїв: `ghcr.io/voxarbor/node-*`,
    `ghcr.io/speaches-ai/speaches` і `caddy`.

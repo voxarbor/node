@@ -21,6 +21,12 @@ RUN apt-get update && apt-get install -y --no-install-recommends curl ca-certifi
 ARG VOICE_CORE_RELEASE=dev
 ENV UPDATER_RELEASE=${VOICE_CORE_RELEASE} HOME=/tmp PYTHONUNBUFFERED=1
 WORKDIR /app
+# Sigstore's trusted root, fetched through TUF at build time (fresh with every updater release, the ARG above busts the
+# cache): signatures are then verified offline, a node does not depend on reaching the TUF mirror (live TUF stays the
+# fallback when this root is too old for a newer certificate)
+RUN echo "release ${VOICE_CORE_RELEASE}" && HOME=/tmp/b cosign initialize >/dev/null \
+    && cp /tmp/b/.sigstore/root/tuf-repo-cdn.sigstore.dev/targets/trusted_root.json /app/trusted_root.json \
+    && rm -rf /tmp/b
 COPY updater.py VERSION ./
 # root: the docker socket's group differs between hosts (Linux, WSL, Docker Desktop)
 CMD ["python", "updater.py"]

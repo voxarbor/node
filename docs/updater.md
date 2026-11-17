@@ -35,7 +35,8 @@ the GitHub release:
 The updater verifies the bundle with `cosign verify-blob --bundle … --certificate-oidc-issuer
 https://token.actions.githubusercontent.com --certificate-identity
 https://github.com/voxarbor/node/.github/workflows/release.yml@refs/tags/<tag>`, then every file by sha256 from the
-manifest. Images are pulled by digest from the manifest and tagged locally as `:<tag>`; compose then runs with
+manifest (since 0.14.4 offline first, against Sigstore's trusted root built into the updater image at its release; live
+TUF only when that root is too old, 3 tries; an identity/signature mismatch fails at once). Images are pulled by digest from the manifest and tagged locally as `:<tag>`; compose then runs with
 `--pull never`, so nothing unverified is started. If cosign cannot reach Sigstore, the update waits (no fallback to
 unsigned).
 
