@@ -261,7 +261,11 @@ first). Real example from a test node (lists shortened with "..."; `local_ai_ver
 `llm_loaded`, `llm_fallback` (why the last request fell back to Opus-MT, e.g. too little free VRAM). The response's
 `model` says what translated it: `llm:eurollm-9b-instruct-2512-q4_k_m`, or with `+opus:…(N)` when N sentences failed
 the output checks (placeholders N0/N1, length) and were re-translated with Opus-MT. The request contract is unchanged.
-A coordinator should prefer `engine: llm` nodes for EN->UK.
+On cards below 16 GB (`llm_shared_card: true`) the LLM runs only while no other GPU model (STT, TTS,
+diarize) is loaded, unloads after each batch and yields when free VRAM drops below 0.5 GB: on WSL/Windows an
+oversubscribed GPU spills into system RAM and slows every service 3-11x instead of failing. So on such nodes EN->UK
+goes to the LLM for batch translation of a whole video while the GPU is otherwise idle, and to Opus-MT during live
+viewing. A coordinator should prefer `engine: llm` nodes for EN->UK batch translation.
 
 ## Updater (since 0.13.0)
 

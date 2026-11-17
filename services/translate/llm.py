@@ -3,8 +3,9 @@
 Only in the node-translate-cuda image with TRANSLATE_ENGINE=llm (compose.gpu.yaml + TRANSLATE_GPU=1). Stdlib only:
 the API process stays light. The model file is downloaded once into the translate volume (sha256 pinned); it sits in
 VRAM only while translating: llama-server starts on demand when enough VRAM is free and stops after LLM_IDLE_S idle.
-When the GPU is too small or busy (STT/TTS of a live viewer have priority), translate() returns None and the caller
-uses Opus-MT on the CPU. Sentences whose output looks wrong (placeholders N0/N1 lost or duplicated, empty, runaway
+When the GPU is too small or busy (STT/TTS of a live viewer have priority; on cards < 16 GB the LLM only runs while
+no other GPU model is loaded, leaves after each batch and yields when VRAM runs low), translate() returns None and the
+caller uses Opus-MT on the CPU. Sentences whose output looks wrong (placeholders N0/N1 lost or duplicated, empty, runaway
 length) are returned as None one by one, so the caller re-translates just those with Opus-MT.
 """
 import hashlib
@@ -32,9 +33,21 @@ DIR = os.environ.get("LLM_DIR", "/cache/llm")
 PATH = os.path.join(DIR, FILE)
 PORT = int(os.environ.get("LLM_PORT", "8081"))
 IDLE_S = float(os.environ.get("LLM_IDLE_S", "60"))
-NEED_GB = float(os.environ.get("LLM_VRAM_GB", "5.6"))        # weights + KV cache for 4 slots x 1024 tokens
+NEED_GB = float(os.environ.get("LLM_VRAM_GB", "7.0"))        # measured: weights 5.6 + KV (q8) + CUDA buffers
 MIN_TOTAL_GB = float(os.environ.get("LLM_MIN_VRAM_TOTAL_GB", "11.5"))  # "12 GB" cards report ~11.9
 WAIT_S = float(os.environ.get("LLM_WAIT_S", "30"))           # wait this long for free VRAM, then Opus-MT
+# Below this the card cannot hold EuroLLM next to STT + TTS + diarize (~6.4 GB): on WSL/Windows the driver then
+# spills into system RAM instead of failing and every GPU service slows down 3-11x (GIGABAIT 12 GB, 2026-11-17).
+# On such a card the LLM runs only while no other GPU model is loaded, leaves right after each batch, and yields
+# at once when free VRAM runs low (the rest of the batch goes to Opus-MT).
+SHARE_GB = float(os.environ.get("LLM_SHARE_VRAM_GB", "15.5"))
+LOW_FREE_GB = float(os.environ.get("LLM_LOW_FREE_GB", "0.5"))
+TOKEN = os.environ.get("API_KEY", "")
+OTHERS = {  # GPU neighbours on the node network: their /health (or speaches' /api/ps) says whether a model is loaded
+    "tts": os.environ.get("TTS_HEALTH_URL", "http://tts:8000/health"),
+    "diarize": os.environ.get("DIARIZE_HEALTH_URL", "http://diarize:8000/health"),
+    "stt": os.environ.get("STT_PS_URL", "http://stt:8000/api/ps"),
+}
 SLOTS = int(os.environ.get("LLM_SLOTS", "4"))
 PROMPT = ("<|im_start|>user\nTranslate the following English source text to Ukrainian:\nEnglish: {t} \n"
           "Ukrainian: <|im_end|>\n<|im_start|>assistant\n")
@@ -97,6 +110,26 @@ def download() -> None:
             time.sleep(30 * attempt)
 
 
+def shared_card() -> bool:
+    return (_state["gpu_total_gb"] or 0) < SHARE_GB
+
+
+def others_loaded() -> list[str]:
+    """which GPU neighbours hold a model now (unknown = assume loaded: never squeeze a live viewer)"""
+    busy = []
+    for name, url in OTHERS.items():
+        try:
+            req = urllib.request.Request(url, headers={"Authorization": f"Bearer {TOKEN}"})
+            with urllib.request.urlopen(req, timeout=3) as r:
+                d = json.loads(r.read())
+            if (d.get("models") if name == "stt" else d.get("loaded")):
+                busy.append(name)
+        except Exception:  # noqa: BLE001
+            if name != "diarize":  # diarize may be off / CPU-only; tts and stt always exist
+                busy.append(name)
+    return busy
+
+
 def _alive() -> bool:
     try:
         with urllib.request.urlopen(f"http://127.0.0.1:{PORT}/health", timeout=3) as r:
@@ -113,13 +146,16 @@ def _start() -> bool:
     deadline = time.monotonic() + WAIT_S
     while True:
         g = gpu_mem()
-        if g and g[1] >= NEED_GB:
+        busy = others_loaded() if shared_card() else []
+        if g and g[1] >= NEED_GB and not busy:
             break
         if time.monotonic() > deadline:
-            _state["last_fallback"] = f"VRAM free {g[1]:.1f} GB < {NEED_GB} GB" if g else "no GPU"
+            _state["last_fallback"] = (f"GPU shared with {','.join(busy)} ({_state['gpu_total_gb']} GB card)" if busy
+                                       else f"VRAM free {g[1]:.1f} GB < {NEED_GB} GB" if g else "no GPU")
             return False
         time.sleep(2)
-    _proc = subprocess.Popen([SERVER, "-m", PATH, "-ngl", "99", "-c", str(1024 * SLOTS), "-np", str(SLOTS),
+    _proc = subprocess.Popen([SERVER, "-m", PATH, "-ngl", "99", "-c", str(512 * SLOTS), "-np", str(SLOTS),
+                              "-fa", "on", "-ctk", "q8_0", "-ctv", "q8_0",
                               "--host", "127.0.0.1", "--port", str(PORT), "--no-webui"],
                              stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     t0 = time.monotonic()
@@ -149,11 +185,21 @@ def stop() -> None:
 
 
 def reaper() -> None:
-    """background thread: the model leaves VRAM after IDLE_S without work"""
+    """background thread: the model leaves VRAM after IDLE_S without work, and at once on a shared card when another
+    service needs the memory (free VRAM low): STT/TTS of a live viewer win"""
     while True:
-        time.sleep(5)
+        time.sleep(1)
+        if not (_proc and _proc.poll() is None):
+            continue
+        if shared_card():
+            g = gpu_mem()
+            if g and g[1] < LOW_FREE_GB:
+                log.info("EuroLLM yields the GPU: %.2f GB free", g[1])
+                _state["last_fallback"] = f"yielded the GPU ({g[1]:.2f} GB free)"
+                stop()  # requests in flight fail and go to Opus-MT
+                continue
         with _lock:
-            if _proc and not _busy and time.monotonic() - _last_used > IDLE_S:
+            if not _busy and time.monotonic() - _last_used > IDLE_S:
                 log.info("EuroLLM unloaded after %.0f s idle", IDLE_S)
                 stop()
 
@@ -187,6 +233,8 @@ def translate(texts: list[str]) -> list[str | None] | None:
         with _lock:
             _busy -= 1
             _last_used = time.monotonic()
+            if not _busy and shared_card():
+                stop()  # a 12 GB card: never keep the model next to a viewer's STT/TTS
 
 
 def _safe(fn, t):
@@ -200,4 +248,4 @@ def health() -> dict:
     return {"engine": "llm" if usable() else "opus", "llm_model": MODEL_NAME if ENABLED else None,
             "llm_loaded": bool(_proc and _proc.poll() is None), "llm_downloaded": _state["downloaded"],
             "llm_download_error": _state["download_error"], "llm_gpu_total_gb": _state["gpu_total_gb"],
-            "llm_last_fallback": _state["last_fallback"]}
+            "llm_last_fallback": _state["last_fallback"], "llm_shared_card": shared_card() if usable() else None}
