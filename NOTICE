@@ -30,6 +30,13 @@ Translation and punctuation
   CC-BY-4.0
 - NLLB-200 distilled 600M, Meta (CTranslate2 conversion JustFrederik/nllb-200-distilled-600M-ct2-int8) -
   CC-BY-NC-4.0, NON-COMMERCIAL ONLY. OPT-IN (TRANSLATE_NLLB=1), off by default.
+- EuroLLM-9B-Instruct-2512, UTTER project (utter-project/EuroLLM-9B-Instruct-2512) - Apache-2.0. Used in the
+  node-translate-cuda image (TRANSLATE_GPU=1) as the GGUF Q4_K_M quantization by mradermacher
+  (mradermacher/EuroLLM-9B-Instruct-2512-GGUF, revision 5138603f): MODIFIED from the original weights by
+  quantization to 4-bit (Q4_K_M); not changed otherwise. Downloaded at runtime into the translate volume, not part of
+  the image. Copyright the EuroLLM authors; license: https://www.apache.org/licenses/LICENSE-2.0
+- llama.cpp (ggml-org/llama.cpp, build b12429, base of node-translate-cuda) - MIT; NVIDIA CUDA runtime libraries
+  inside that base image - NVIDIA CUDA EULA (redistributable components)
 - 1-800-BAD-CODE/xlm-roberta_punctuation_fullstop_truecase - Apache-2.0
 - py3langid - BSD-3-Clause; CTranslate2 - MIT; sentencepiece - Apache-2.0; ONNX Runtime - MIT
 

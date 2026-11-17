@@ -254,6 +254,15 @@ first). Real example from a test node (lists shortened with "..."; `local_ai_ver
 }
 ```
 
+## Translation engine (since 0.13.1)
+
+`services.translate.engine`: `llm` (EuroLLM-9B-Instruct-2512 Q4_K_M via llama.cpp on the GPU, EN->UK; nodes with
+`TRANSLATE_GPU=1`, GPUs of 12 GB+) or `opus` (Opus-MT on the CPU). Also `model`, `device` (`cuda` for llm),
+`llm_loaded`, `llm_fallback` (why the last request fell back to Opus-MT, e.g. too little free VRAM). The response's
+`model` says what translated it: `llm:eurollm-9b-instruct-2512-q4_k_m`, or with `+opus:…(N)` when N sentences failed
+the output checks (placeholders N0/N1, length) and were re-translated with Opus-MT. The request contract is unchanged.
+A coordinator should prefer `engine: llm` nodes for EN->UK.
+
 ## Updater (since 0.13.0)
 
 `/capabilities.updater` (present when the node runs node-updater): `version`, `mode` (auto | notify | off, effective),

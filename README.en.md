@@ -30,10 +30,11 @@ streaming playback, voice and lexicon tools): `docker compose -f compose.yaml -f
 Behind NAT / for a public coordinator: the node can dial out instead (`COORDINATOR_URL` + `NODE_JOIN_CODE` in `.env`,
 docs/connect.md); then `GATEWAY_PORT` need not be open.
 
-NVIDIA GPU: `COMPOSE_FILE=compose.yaml:compose.gpu.yaml` in `.env` (STT and TTS on the GPU; every plain `docker compose`
+NVIDIA GPU: `COMPOSE_FILE=compose.yaml:compose.gpu.yaml` in `.env` (STT, TTS and diarization on the GPU; with `TRANSLATE_GPU=1` on GPUs of 12 GB+ also EN→UK translation with
+EuroLLM-9B; every plain `docker compose`
 command and update keeps it; docs/gateway.md "GPU nodes").
 
-Size threads and CPU limits to the machine in `.env`. Models load on demand and unload after 10 minutes idle.
+Size threads and CPU limits to the machine in `.env`. Models load on demand and unload after 2 minutes idle.
 
 ## Docs
 

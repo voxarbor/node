@@ -8,9 +8,9 @@ FILES = ("compose.yaml", "compose.gpu.yaml", "Caddyfile", "prune.sh")
 env = dict(os.environ, NODE_TOKEN="x", VOICE_CORE_TAG=tag, COMPOSE_PROFILES="fetch,init")
 
 
-def images(*files):
+def images(*files, extra=None):
     cmd = ["docker", "compose"] + [a for f in files for a in ("-f", f)] + ["config", "--images"]
-    return subprocess.run(cmd, env=env, capture_output=True, text=True, check=True).stdout.split()
+    return subprocess.run(cmd, env=dict(env, **(extra or {})), capture_output=True, text=True, check=True).stdout.split()
 
 
 def digest(ref):
@@ -19,7 +19,8 @@ def digest(ref):
     return ref.rsplit(":", 1)[0] + "@" + json.loads(out)["digest"]
 
 
-refs = sorted(set(images("compose.yaml") + images("compose.yaml", "compose.gpu.yaml")))
+refs = sorted(set(images("compose.yaml") + images("compose.yaml", "compose.gpu.yaml")
+                 + images("compose.yaml", "compose.gpu.yaml", extra={"TRANSLATE_GPU": "1"})))
 opus = [r for r in refs if "/node-models-opus:" in r]
 man = {
     "version": tag,
