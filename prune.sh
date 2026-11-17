@@ -15,6 +15,7 @@ before=$(df -B1 --output=used /var/lib/docker 2>/dev/null | tail -1 || echo 0)
 n=0
 # images any container on this host uses (running or stopped, any compose project): never untag those, so a second
 # project on the same host (another node, a test stand) keeps its images
+# shellcheck disable=SC2086  # DOCKER may be "sudo docker"
 in_use=$($DOCKER ps -aq | xargs -r $DOCKER inspect --format '{{.Image}}' 2>/dev/null | sort -u)
 for ref in $($DOCKER images --format '{{.Repository}}:{{.Tag}}' | grep -E '^(ghcr\.io/voxarbor/node-|ghcr\.io/speaches-ai/speaches:)' | grep -v ':<none>$'); do
   echo "$used" | grep -qx "$ref" && continue

@@ -474,11 +474,12 @@ class Updater:
             self.st.set(state="paused")
             self.idle_since = None
             return
-        if not ver(tag) or not ver(cur) or tag == cur:
+        # cur may be "latest" (nodes of the coordinator's old installer): any signed release then pins it
+        if not ver(tag) or tag == cur:
             self.st.set(state="idle", available=None)
             self.repair(cur)
             return
-        if ver(tag) < ver(cur) and not ALLOW_DOWNGRADE:  # e.g. a coordinator that has not caught up yet
+        if ver(cur) and ver(tag) < ver(cur) and not ALLOW_DOWNGRADE:  # e.g. a coordinator that has not caught up yet
             self.st.set(state="idle", available=None, error=f"desired {tag} is older than {cur}: ignored")
             return
         failed_at = (self.st.d.get("failed") or {}).get(tag)

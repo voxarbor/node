@@ -20,8 +20,14 @@ jobs:
         run: python3 .github/release_manifest.py "${{ github.ref_name }}" > manifest.json && cat manifest.json
       - name: sign
         run: cosign sign-blob --yes --bundle manifest.json.sigstore.json manifest.json
+      - name: installer and SHA256SUMS (what install.sh checks; docs/install.md shows how to verify by hand)
+        run: |
+          cp .env.example env.example
+          sha256sum install.sh compose.yaml compose.gpu.yaml Caddyfile prune.sh env.example > SHA256SUMS && cat SHA256SUMS
+          cosign sign-blob --yes --bundle SHA256SUMS.sigstore.json SHA256SUMS
       - name: release assets
         env: { GH_TOKEN: "${{ github.token }}", TAG: "${{ github.ref_name }}" }
         run: |
           gh release view "$TAG" >/dev/null 2>&1 || gh release create "$TAG" --title "$TAG" --notes "Опис релізу буде додано."
-          gh release upload "$TAG" compose.yaml compose.gpu.yaml Caddyfile prune.sh manifest.json manifest.json.sigstore.json --clobber
+          gh release upload "$TAG" compose.yaml compose.gpu.yaml Caddyfile prune.sh manifest.json manifest.json.sigstore.json \
+            install.sh env.example SHA256SUMS SHA256SUMS.sigstore.json --clobber

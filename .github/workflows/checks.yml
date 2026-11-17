@@ -1,0 +1,23 @@
+name: checks
+# install.sh and prune.sh run on people's PCs: shellcheck and a dry run on every change
+on:
+  push:
+    paths: ["install.sh", "prune.sh", ".github/workflows/checks.yml"]
+  pull_request:
+    paths: ["install.sh", "prune.sh"]
+permissions:
+  contents: read
+jobs:
+  shell:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: shellcheck
+        run: docker run --rm -v "$PWD:/m" -w /m koalaman/shellcheck:v0.11.0 -s sh install.sh prune.sh
+      - name: install.sh --help and --dry-run
+        run: |
+          sh install.sh --help | grep -q -- "--coordinator"
+          sh install.sh --dry-run --coordinator https://example.invalid --join test_1 --services stt,fetch --gpu off --mode gentle
+          ! sh install.sh --dry-run --join x                                         # no coordinator
+          ! sh install.sh --dry-run --coordinator https://e.invalid --join x --services foo
+          ! sh install.sh --dry-run --coordinator https://e.invalid --join 'x;rm'     # bad join code

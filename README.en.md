@@ -6,6 +6,10 @@ The worker node of [VoxArbor UA](https://github.com/voxarbor): self-hosted voice
 text-to-speech, translation into Ukrainian, punctuation restoration and speaker diarization, behind one gateway port
 with one token. Runs on one PC or as one of many worker nodes of a coordinator. No cloud, no third-party API keys.
 
+**What is open.** The node (all services, the updater) and its installer `install.sh` are open: this repository. The
+VoxArbor coordinator (the site and the scheduling across nodes) is closed; a node gives it only requests to its voice
+services, no access to your computer (docs/security.md, Ukrainian). NLLB-200 (non-commercial, CC-BY-NC) is off by default.
+
 The idea of VoxArbor: people pool their computers into a network that translates and voices videos in Ukrainian.
 More at [github.com/voxarbor](https://github.com/voxarbor).
 
@@ -24,7 +28,8 @@ first voiced phrase of a video comes after ~42 s; with an NVIDIA GPU (RTX 5070 T
 ## Easiest: the command from the coordinator's site
 
 For a node of the VoxArbor network, the coordinator's site has a ready install command in «Мої вузли» (My nodes) for
-Linux and WSL: copy it into a terminal; it installs the node and links it to your account.
+Linux and WSL: copy it into a terminal; it installs the node and links it to your account. It is this repository's
+`install.sh`; how to check its SHA256 before running it and what it does step by step: docs/install.md.
 
 ## Run by hand
 
@@ -56,7 +61,8 @@ Size threads and CPU limits to the machine in `.env`. Models load on demand and 
 
 ## Docs
 
-- `docs/install.md` (Ukrainian): install, update, GPU, economy mode, cleanup.
+- `docs/install.md` (Ukrainian): install (`install.sh` and all its options), update, GPU, economy mode, cleanup.
+- `docs/security.md` (Ukrainian): what the node does on the PC, the updater's rights, release verification.
 - `docs/updater.md`: automatic updates: security, protocol, rollback.
 - `docs/gateway.md`: gateway paths, `/capabilities` contract (schema 1), images, operations.
 - `docs/API.md`: the TTS API (parameters, jobs, SSE, lexicon).
