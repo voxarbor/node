@@ -165,11 +165,13 @@ def capabilities() -> dict:
                 s.update(model=STT_MODEL, endpoints=["/v1/audio/transcriptions"], engine="faster-whisper (speaches)",
                          model_revision=_stt_revision())
             elif name == "fetch":
+                s["features"] = h.get("features", [])   # "list": POST /fetch/v1/list (0.13.5+)
+                s["resting_s"] = h.get("resting_s")       # > 0: cooling down after a YouTube bot check
                 s.update(engine="yt-dlp", model="yt-dlp + deno (YouTube JS challenges)",
                          model_revision=h.get("ytdlp_version"))
                 s.update(ytdlp_version=h.get("ytdlp_version"), deno_version=h.get("deno_version"),
                          last_bot_check=h.get("last_bot_check"), last_ok=h.get("last_ok"),
-                         endpoints=["/v1/info", "/v1/subs", "/v1/audio"])
+                         endpoints=["/v1/info", "/v1/subs", "/v1/audio", "/v1/list"])
             elif name == "diarize":
                 s.update(engine=h.get("engine", "sherpa-onnx"), gender_model=h.get("gender_model", "tts-voices-0"),
                          model=h.get("model") or "pyannote segmentation-3.0 + wespeaker_en_voxceleb_resnet34_LM (sherpa-onnx)",

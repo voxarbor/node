@@ -69,10 +69,13 @@ Optional cookies: a Netscape `cookies.txt` in the `fetch-config` volume (`/confi
 | `POST /fetch/v1/info {"url"}` | yt-dlp info dict (`extract_info`, no download) without `formats` and signed URLs; `subtitles` / `automatic_captions` as `{lang: [{ext, name}]}` |
 | `POST /fetch/v1/subs {"url", "lang", "kind": "manual"\|"auto"}` | the json3 track as YouTube returns it (404 `no_track`) |
 | `POST /fetch/v1/audio {"url"}` | best audio stream as is (no re-encode), header `X-Audio-Ext` (webm, m4a …) |
+| `POST /fetch/v1/list {"url", "limit": 1..200 (50)}` | since 0.13.5 (`services.fetch.features` has `"list"`): videos of a channel («Videos» tab), a playlist, or the channel of a given video, newest first, one flat request: `{channel_id, channel, entries: [{id, title, duration, upload_date (often null in flat mode), live}]}`; Shorts left out |
 
 Errors are JSON `{"error", "detail"}`: 400 bad URL, 422 `unavailable` (private, removed, age/region-locked,
 upcoming), 429 `bot_check` (YouTube asks to sign in: use another node and let this one rest; also
 `services.fetch.last_bot_check`) or `busy` (more than `FETCH_QUEUE_MAX` at once), 504 `timeout`, 502 `fetch_failed`.
+Politeness (since 0.13.5): at least `FETCH_MIN_INTERVAL_S` (3) s between yt-dlp starts; after a bot check every request
+gets 429 `bot_check` for `FETCH_BOT_COOLDOWN_S` (900) s (`services.fetch.resting_s` shows what is left).
 Timing: info/subs take 5–40 s (JS challenge solving), so give them a 120 s client timeout.
 
 ## GET /capabilities (schema 1)

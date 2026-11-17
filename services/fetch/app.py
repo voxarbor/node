@@ -5,6 +5,7 @@ in memory while idle). Only YouTube URLs are accepted.
   POST /v1/info  {"url"}                          -> yt-dlp info dict without formats / signed URLs
   POST /v1/subs  {"url", "lang", "kind": manual|auto} -> the json3 track as is
   POST /v1/audio {"url"}                          -> best audio stream as is (no re-encode), header X-Audio-Ext
+  POST /v1/list  {"url", "limit"}                 -> a channel's / playlist's videos, newest first (flat: one request)
 Errors: 400 bad URL, 422 video unavailable/private, 429 {"error": "bot_check"} when YouTube asks to sign in
 (the coordinator should use another node and let this one rest), 502 other yt-dlp failures."""
 
@@ -30,6 +31,12 @@ TIMEOUT = float(os.environ.get("FETCH_TIMEOUT", "120"))          # info / subs
 AUDIO_TIMEOUT = float(os.environ.get("FETCH_AUDIO_TIMEOUT", "1800"))
 COOKIES = os.environ.get("YTDLP_COOKIES", "/config/cookies.txt")  # optional Netscape cookies file
 PROXY = os.environ.get("YTDLP_PROXY", "")                        # optional outbound proxy for yt-dlp
+# Politeness towards YouTube from a home IP: at least MIN_INTERVAL s between yt-dlp starts, and after a bot check
+# every request is refused (429 bot_check) for BOT_COOLDOWN s, so the address can recover instead of getting blocked.
+MIN_INTERVAL = float(os.environ.get("FETCH_MIN_INTERVAL_S", "3"))
+BOT_COOLDOWN = float(os.environ.get("FETCH_BOT_COOLDOWN_S", "900"))
+LIST_MAX = 200
+FEATURES = ["list"]
 HOSTS = {"youtube.com", "www.youtube.com", "m.youtube.com", "music.youtube.com", "youtu.be",
          "www.youtube-nocookie.com", "youtube-nocookie.com"}
 DROP = {"formats", "requested_formats", "requested_downloads", "requested_subtitles", "url", "manifest_url",
@@ -44,7 +51,8 @@ GONE = re.compile(r"Video unavailable|Private video|This video is (?:private|una
 app = FastAPI(title="VoxArbor Node fetch", docs_url=None, redoc_url=None)
 _bearer = HTTPBearer(auto_error=False)
 _busy = 0
-_state = {"last_bot_check": None, "last_ok": None}
+_state = {"last_bot_check": None, "last_ok": None, "bot_at": 0.0, "last_start": 0.0}
+_pace = asyncio.Lock()
 _version: dict = {}
 
 
@@ -82,6 +90,7 @@ def fail(stderr: str) -> HTTPException:
     msg = stderr.strip().splitlines()[-1][:300] if stderr.strip() else "yt-dlp failed"
     if BOT.search(stderr):
         _state["last_bot_check"] = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+        _state["bot_at"] = time.monotonic()
         return HTTPException(429, {"error": "bot_check", "detail": msg})
     if GONE.search(stderr):
         return HTTPException(422, {"error": "unavailable", "detail": msg})
@@ -101,6 +110,15 @@ class Slot:
 
 
 async def run(args: list[str], timeout: float) -> tuple[int, bytes, str]:
+    if args[0] == "yt-dlp" and "--version" not in args:
+        left = BOT_COOLDOWN - (time.monotonic() - _state["bot_at"])
+        if _state["bot_at"] and left > 0:
+            raise HTTPException(429, {"error": "bot_check", "detail": f"resting after a bot check, {left:.0f} s left"})
+        async with _pace:  # spaced starts, also when the coordinator sends several at once
+            wait = MIN_INTERVAL - (time.monotonic() - _state["last_start"])
+            if wait > 0:
+                await asyncio.sleep(wait)
+            _state["last_start"] = time.monotonic()
     p = await asyncio.create_subprocess_exec(*args, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
     try:
         out, err = await asyncio.wait_for(p.communicate(), timeout)
@@ -138,7 +156,8 @@ async def versions() -> dict:
 async def health() -> dict:
     return {"status": "ok", "loaded": None, "busy": _busy, "queue_max": QUEUE_MAX, **await versions(),
             "last_bot_check": _state["last_bot_check"], "last_ok": _state["last_ok"],
-            "cookies": bool(COOKIES and os.path.isfile(COOKIES)), "proxy": bool(PROXY)}
+            "cookies": bool(COOKIES and os.path.isfile(COOKIES)), "proxy": bool(PROXY), "features": FEATURES,
+            "resting_s": max(0, round(BOT_COOLDOWN - (time.monotonic() - _state["bot_at"]))) if _state["bot_at"] else 0}
 
 
 def ok() -> None:
@@ -155,6 +174,56 @@ async def info(request: Request) -> JSONResponse:
         raise fail(err)
     ok()
     return JSONResponse(clean_info(json.loads(out)))
+
+
+CHANNEL = re.compile(r"^/(?:@[^/]+|channel/[^/]+|c/[^/]+|user/[^/]+)")
+LIVE = {"is_live", "is_upcoming", "was_live", "post_live"}
+
+
+@app.post("/v1/list", dependencies=[Depends(auth)])
+async def list_videos(request: Request) -> JSONResponse:
+    """videos of a channel (its «Videos» tab), a playlist, or the channel of a given video; newest first, flat
+    (one listing request, nothing per video); Shorts left out, live streams marked"""
+    body = await request.json()
+    url = youtube_url(body.get("url"))
+    limit = body.get("limit", 50)
+    if not isinstance(limit, int) or not 1 <= limit <= LIST_MAX:
+        raise HTTPException(400, f"limit 1..{LIST_MAX}")
+    u = urlsplit(url)
+    async with Slot():
+        with tempfile.TemporaryDirectory() as tmp:
+            if "list=" in (u.query or "") and not u.path.startswith("/watch"):
+                target = url  # a playlist
+            elif CHANNEL.match(u.path or ""):
+                m = CHANNEL.match(u.path)
+                target = f"https://www.youtube.com{m.group(0)}/videos"
+            else:  # a video: its channel's «Videos» tab (one light request for the channel URL)
+                code, out, err = await run(base_args() + cookies_args(tmp) + ["--skip-download", "--print",
+                                           "%(channel_url)s", "--", url], TIMEOUT)
+                if code != 0:
+                    raise fail(err)
+                ch = out.decode().strip().splitlines()[-1] if out.strip() else ""
+                if not ch.startswith("https://www.youtube.com/"):
+                    raise HTTPException(422, {"error": "unavailable", "detail": "no channel for this video"})
+                target = ch.rstrip("/") + "/videos"
+            args = [a for a in base_args() if a != "--no-playlist"] + cookies_args(tmp) + [
+                "--flat-playlist", "-J", "--playlist-end", str(limit), "--", target]
+            code, out, err = await run(args, TIMEOUT)
+    if code != 0:
+        raise fail(err)
+    info = json.loads(out)
+    entries = []
+    for e in info.get("entries") or []:
+        if not isinstance(e, dict) or not e.get("id") or len(str(e["id"])) != 11:
+            continue
+        if "/shorts/" in (e.get("url") or ""):
+            continue
+        entries.append({"id": e["id"], "title": e.get("title"), "duration": e.get("duration"),
+                        "upload_date": e.get("upload_date"), "live": e.get("live_status") in LIVE})
+    ok()
+    return JSONResponse({"channel_id": info.get("channel_id") or info.get("uploader_id"),
+                         "channel": info.get("channel") or info.get("uploader") or info.get("title"),
+                         "entries": entries[:limit]})
 
 
 @app.post("/v1/subs", dependencies=[Depends(auth)])
