@@ -18,14 +18,14 @@ services:
 
   tts:
     <<: *gpu
-    image: ${REGISTRY:-ghcr.io/voxarbor}/node-tts-cuda:${VOICE_CORE_TAG:-v0.12.0}
+    image: ${REGISTRY:-ghcr.io/voxarbor}/node-tts-cuda:${VOICE_CORE_TAG:-v0.12.1}
     environment:
       TTS_DEVICE: cuda
       QUEUE_MAX: ${TTS_GPU_QUEUE_MAX:-16}   # a GPU node is fast: let the coordinator queue more
 
   diarize:
     <<: *gpu
-    image: ${REGISTRY:-ghcr.io/voxarbor}/node-diarize-cuda:${VOICE_CORE_TAG:-v0.12.0}
+    image: ${REGISTRY:-ghcr.io/voxarbor}/node-diarize-cuda:${VOICE_CORE_TAG:-v0.12.1}
     environment:
       DIARIZE_ENGINE: pyannote   # community-1: better speaker counting; the CPU image keeps sherpa-onnx
       DIARIZE_DEVICE: cuda
@@ -41,5 +41,5 @@ services:
     environment:
       STT_DEVICE: cuda
       STT_IMAGE: ${STT_GPU_IMAGE:-ghcr.io/speaches-ai/speaches:0.8.3-cuda-12.6.3}
-      DIARIZE_IMAGE: ${REGISTRY:-ghcr.io/voxarbor}/node-diarize-cuda:${VOICE_CORE_TAG:-v0.12.0}
-      TTS_IMAGE: ${REGISTRY:-ghcr.io/voxarbor}/node-tts-cuda:${VOICE_CORE_TAG:-v0.12.0}
+      DIARIZE_IMAGE: ${REGISTRY:-ghcr.io/voxarbor}/node-diarize-cuda:${VOICE_CORE_TAG:-v0.12.1}
+      TTS_IMAGE: ${REGISTRY:-ghcr.io/voxarbor}/node-tts-cuda:${VOICE_CORE_TAG:-v0.12.1}

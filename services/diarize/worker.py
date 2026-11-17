@@ -19,6 +19,7 @@ MERGE_SIM = float(os.environ.get("DIARIZE_MERGE_SIM", "0.88"))  # same-gender cl
 # calibrated: held-out speakers 94.7 %, ECE 0.022; our videos 7/7 speakers incl. men at f0 ~210-230 Hz). Pitch alone
 # fails on energetic male let's-players.
 _GENDER = np.load(os.path.join(os.path.dirname(os.path.abspath(__file__)), "gender_lr.npz"))
+GENDER_MODEL = "wespeaker-lr-real-1"  # gender_lr.npz: real voices (CV19 uk/en/ru/pl + LibriSpeech), Platt-calibrated
 _diar: dict = {}
 _emb = None
 # Engine: sherpa-onnx (CPU, fast) or pyannote community-1 (better speaker counting, exclusive turns; meant for a GPU,

@@ -138,7 +138,7 @@ def capabilities() -> dict:
                          last_bot_check=h.get("last_bot_check"), last_ok=h.get("last_ok"),
                          endpoints=["/v1/info", "/v1/subs", "/v1/audio"])
             elif name == "diarize":
-                s.update(engine=h.get("engine", "sherpa-onnx"),
+                s.update(engine=h.get("engine", "sherpa-onnx"), gender_model=h.get("gender_model", "tts-voices-0"),
                          model=h.get("model") or "pyannote segmentation-3.0 + wespeaker_en_voxceleb_resnet34_LM (sherpa-onnx)",
                          sessions=h.get("sessions"), endpoints=["/v1/diarize"])
             _last[name] = (time.time(), dict(s))

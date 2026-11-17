@@ -26,16 +26,16 @@ services:
 
   node-info:
     <<: *common
-    image: ${REGISTRY:-ghcr.io/voxarbor}/node-node-info:${VOICE_CORE_TAG:-v0.12.0}
+    image: ${REGISTRY:-ghcr.io/voxarbor}/node-node-info:${VOICE_CORE_TAG:-v0.12.1}
     environment:
       <<: *env
-      VOICE_CORE_VERSION: ${VOICE_CORE_TAG:-v0.12.0}
+      VOICE_CORE_VERSION: ${VOICE_CORE_TAG:-v0.12.1}
       STT_MODEL: ${STT_MODEL:-deepdml/faster-whisper-large-v3-turbo-ct2}
       STT_IMAGE: ghcr.io/speaches-ai/speaches:0.8.3-cpu
-      TTS_IMAGE: ${REGISTRY:-ghcr.io/voxarbor}/node-tts:${VOICE_CORE_TAG:-v0.12.0}
-      TRANSLATE_IMAGE: ${REGISTRY:-ghcr.io/voxarbor}/node-translate:${VOICE_CORE_TAG:-v0.12.0}
-      DIARIZE_IMAGE: ${REGISTRY:-ghcr.io/voxarbor}/node-diarize:${VOICE_CORE_TAG:-v0.12.0}
-      FETCH_IMAGE: ${REGISTRY:-ghcr.io/voxarbor}/node-fetch:${VOICE_CORE_TAG:-v0.12.0}
+      TTS_IMAGE: ${REGISTRY:-ghcr.io/voxarbor}/node-tts:${VOICE_CORE_TAG:-v0.12.1}
+      TRANSLATE_IMAGE: ${REGISTRY:-ghcr.io/voxarbor}/node-translate:${VOICE_CORE_TAG:-v0.12.1}
+      DIARIZE_IMAGE: ${REGISTRY:-ghcr.io/voxarbor}/node-diarize:${VOICE_CORE_TAG:-v0.12.1}
+      FETCH_IMAGE: ${REGISTRY:-ghcr.io/voxarbor}/node-fetch:${VOICE_CORE_TAG:-v0.12.1}
     deploy:
       resources:
         limits: { cpus: "0.5", memory: 128m }
@@ -62,7 +62,7 @@ services:
 
   tts:
     <<: *common
-    image: ${REGISTRY:-ghcr.io/voxarbor}/node-tts:${VOICE_CORE_TAG:-v0.12.0}
+    image: ${REGISTRY:-ghcr.io/voxarbor}/node-tts:${VOICE_CORE_TAG:-v0.12.1}
     environment:
       <<: *env
       ENABLE_UI: "false"   # compose.ui.yaml turns the web UI on
@@ -86,7 +86,7 @@ services:
 
   translate:
     <<: *common
-    image: ${REGISTRY:-ghcr.io/voxarbor}/node-translate:${VOICE_CORE_TAG:-v0.12.0}
+    image: ${REGISTRY:-ghcr.io/voxarbor}/node-translate:${VOICE_CORE_TAG:-v0.12.1}
     environment:
       <<: *env
       TRANSLATE_MODEL: nllb-600m
@@ -103,7 +103,7 @@ services:
 
   diarize:
     <<: *common
-    image: ${REGISTRY:-ghcr.io/voxarbor}/node-diarize:${VOICE_CORE_TAG:-v0.12.0}
+    image: ${REGISTRY:-ghcr.io/voxarbor}/node-diarize:${VOICE_CORE_TAG:-v0.12.1}
     environment:
       <<: *env
       IDLE_TTL: "600"
@@ -119,7 +119,7 @@ services:
   # outbound link to a coordinator (docs/connect.md): only active with COORDINATOR_URL, otherwise it idles
   connector:
     <<: *common
-    image: ${REGISTRY:-ghcr.io/voxarbor}/node-connector:${VOICE_CORE_TAG:-v0.12.0}
+    image: ${REGISTRY:-ghcr.io/voxarbor}/node-connector:${VOICE_CORE_TAG:-v0.12.1}
     environment:
       <<: *env
       COORDINATOR_URL: ${COORDINATOR_URL:-}
@@ -137,7 +137,7 @@ services:
   fetch:
     <<: *common
     profiles: ["fetch"]
-    image: ${REGISTRY:-ghcr.io/voxarbor}/node-fetch:${VOICE_CORE_TAG:-v0.12.0}
+    image: ${REGISTRY:-ghcr.io/voxarbor}/node-fetch:${VOICE_CORE_TAG:-v0.12.1}
     environment:
       <<: *env
       QUEUE_MAX: ${FETCH_QUEUE_MAX:-4}
@@ -167,7 +167,7 @@ services:
   # one-shot: the Whisper model into STT (idempotent)
 
   init-stt:
-    image: ${REGISTRY:-ghcr.io/voxarbor}/node-node-info:${VOICE_CORE_TAG:-v0.12.0}
+    image: ${REGISTRY:-ghcr.io/voxarbor}/node-node-info:${VOICE_CORE_TAG:-v0.12.1}
     command: ["python", "init_models.py"]
     environment:
       <<: *env

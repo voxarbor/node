@@ -95,6 +95,7 @@ async def health() -> dict:
         dev = os.environ.get("DIARIZE_DEVICE", "cpu") if worker.ENGINE == "pyannote" else "cpu"
     return {"status": "ok", "loaded": _pool is not None, "idle_ttl": IDLE_TTL, "sessions": len(_sessions),
             "busy": _busy, "queue_max": QUEUE_MAX, "engine": worker.ENGINE, "device": dev,
+            "gender_model": worker.GENDER_MODEL,
             "model": ("pyannote/speaker-diarization-community-1 (pyannote.audio 4)" if worker.ENGINE == "pyannote"
                       else "pyannote segmentation-3.0 + wespeaker_en_voxceleb_resnet34_LM (sherpa-onnx)")}
 

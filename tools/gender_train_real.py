@@ -159,5 +159,8 @@ def report(k):
 rep = {"speakers": n, "windows": len(rows), "female_share": round(float(np.mean([r[2] for r in rows])), 3),
        "train": report("train"), "test": report("test")}
 np.savez(f"{OUT}/gender_lr.npz", w=W, b=np.float32(B))
+# for threshold studies: the held-out windows' calibrated p_female and truth
+for k in ("cal", "test"):
+    np.savez(f"{OUT}/heldout_{k}.npz", p=1 / (1 + np.exp(-(X[k] @ W + B))), y=Y[k], src=np.array(SRC[k]))
 json.dump(rep, open(f"{OUT}/report.json", "w"), indent=1)
 print(json.dumps(rep, indent=1))
