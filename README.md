@@ -1,55 +1,64 @@
 # VoxArbor Node
 
-The worker node of [VoxArbor UA](https://github.com/voxarbor). Self-hosted voice services for Ukrainian, running on CPU: speech-to-text, text-to-speech, translation into
-Ukrainian, punctuation restoration and speaker diarization, behind one gateway port with one token. Runs on one PC or as many worker nodes
-of a coordinator. No GPU, no cloud, no API keys of third parties.
+*Українською. English: [README.en.md](README.en.md).*
 
-| path (gateway) | what |
+Робочий вузол [VoxArbor UA](https://github.com/voxarbor): голосові сервіси для української мови на власному
+комп'ютері. Розпізнавання мовлення, озвучення, переклад українською, відновлення пунктуації та розпізнавання мовців.
+Усе за одним портом і одним токеном. Працює на процесорі, відеокарта NVIDIA необов'язкова. Вузол може обслуговувати
+один ПК або бути одним із багатьох вузлів координатора. Без хмари і без чужих API-ключів.
+
+| шлях (шлюз) | що робить |
 |---|---|
-| `/tts/v1/audio/speech`, `/tts/v1/audio/speech/stream`, `/tts/v1/jobs` | Ukrainian TTS (HolosTTS; StyleTTS2 opt-in): whole lectures, streaming (first sound ~1.5 s warm), jobs with history and subtitles; Markdown/URL cleanup, English names, numbers, Roman numerals, initials, brackets, stress lexicon |
-| `/stt/v1/audio/transcriptions` | Whisper large-v3-turbo (OpenAI-compatible) |
-| `/translate/v1/translate`, `/translate/v1/punctuate` | Opus-MT → Ukrainian (NLLB-200 opt-in), punctuation + capitals + sentences for raw captions |
-| `/diarize/v1/diarize` | who speaks when, each speaker's gender |
-| `/fetch/v1/info`, `/fetch/v1/subs`, `/fetch/v1/audio` | optional (`COMPOSE_PROFILES=fetch`): YouTube metadata, subtitles and audio fetched from this node's IP |
-| `/capabilities` | what this node runs (schema 1) |
+| `/tts/v1/audio/speech`, `/tts/v1/audio/speech/stream`, `/tts/v1/jobs` | озвучення українською (HolosTTS): цілі лекції, потокове відтворення (перший звук ~1,5 с), завдання з історією й субтитрами; чистить Markdown і посилання, читає англійські імена, числа, римські цифри, ініціали, дужки; словник наголосів |
+| `/stt/v1/audio/transcriptions` | розпізнавання мовлення Whisper large-v3-turbo (сумісне з OpenAI) |
+| `/translate/v1/translate`, `/translate/v1/punctuate` | переклад українською (Opus-MT), пунктуація, великі літери й речення для сирих субтитрів |
+| `/diarize/v1/diarize` | хто й коли говорить, стать кожного мовця |
+| `/fetch/v1/info`, `/fetch/v1/subs`, `/fetch/v1/audio` | за бажанням (`COMPOSE_PROFILES=fetch`): дані, субтитри й аудіо YouTube з IP цього вузла |
+| `/capabilities` | що вміє цей вузол (схема 1) |
 
-## Run
+## Запуск
 
-Docker with compose v2, ~25 GB disk, 16 GB RAM recommended (4+ cores).
+Потрібні Docker із compose v2, ~25 ГБ диска, бажано 16 ГБ RAM і 4+ ядра.
 ```
 cp .env.example .env
 sed -i "s/^NODE_TOKEN=.*/NODE_TOKEN=$(openssl rand -hex 32)/" .env
+docker compose --env-file .env pull
+docker compose --env-file .env --profile init run --rm init-opus
 docker compose --env-file .env up -d
 ```
-The first start pulls the images (~11 GB) and downloads ~3 GB of models. Then every request carries
-`Authorization: Bearer <NODE_TOKEN>` to `http://<host>:8790` (`GATEWAY_PORT`). Optional web UI «Озвучка» (history,
-streaming playback, voice and lexicon tools): `docker compose -f compose.yaml -f compose.ui.yaml --env-file .env up -d`.
+Перший запуск завантажує образи (~11 ГБ) і ~3 ГБ моделей. Далі кожен запит іде на `http://<хост>:8790`
+(`GATEWAY_PORT`) із заголовком `Authorization: Bearer <NODE_TOKEN>`.
 
-Behind NAT / for a public coordinator: the node can dial out instead (`COORDINATOR_URL` + `NODE_JOIN_CODE` in `.env`,
-docs/connect.md); then `GATEWAY_PORT` need not be open.
+Вузол за NAT або для публічного координатора може сам підключатися назовні (`COORDINATOR_URL` і `NODE_JOIN_CODE`
+у `.env`, див. docs/connect.md). Тоді відкривати `GATEWAY_PORT` не треба.
 
-NVIDIA GPU: `COMPOSE_FILE=compose.yaml:compose.gpu.yaml` in `.env` (STT and TTS on the GPU; every plain `docker compose`
-command and update keeps it; docs/gateway.md "GPU nodes").
+Відеокарта NVIDIA: додайте в `.env` рядок `COMPOSE_FILE=compose.yaml:compose.gpu.yaml`. Тоді розпізнавання, озвучення
+й розпізнавання мовців працюють на відеокарті.
 
-Size threads and CPU limits to the machine in `.env`. Models load on demand and unload after 10 minutes idle.
+Щоб вузол не заважав власникові ПК, увімкніть щадний режим `NODE_MODE=gentle`: одна задача одночасно й половина
+потоків процесора.
 
-## Docs
+Оновлення, очищення старих образів, відеокарта, щадний режим: **[docs/install.md](docs/install.md)**.
 
-- `docs/gateway.md`: gateway paths, `/capabilities` contract (schema 1), images, operations.
-- `docs/API.md`: the TTS API (parameters, jobs, SSE, lexicon).
-- `NOTICE`: model licenses. NLLB-200 is non-commercial and StyleTTS2 voices are named after real narrators: both
-  are off by default.
+Моделі завантажуються в пам'ять на вимогу й вивантажуються після 10 хвилин простою.
 
-## Development
+## Документація
 
-Images are built by GitHub Actions (`.github/workflows/images.yml`) into `ghcr.io/voxarbor/node-<service>` (public, no login needed)
-(tags `v<release>` from the root `VERSION`, the service's own version, `sha-<12>`, `latest`; pin
-`VOICE_CORE_TAG=v<release>` on nodes); `models-opus.yml` builds the Opus-MT data image. Tests:
-`tests/test_speech.py` (text pipeline, no models) and `tests/test_pool.py` (worker queue), run inside the images.
+- `docs/install.md`: встановлення, оновлення, відеокарта, щадний режим, очищення (українською).
+- `docs/gateway.md`: шляхи шлюзу, контракт `/capabilities` (схема 1), образи (технічний контракт, англійською).
+- `docs/API.md`: API озвучення: параметри, завдання, SSE, словник (англійською).
+- `docs/connect.md`: протокол підключення вузла до координатора (англійською).
+- `NOTICE`: ліцензії моделей. NLLB-200 лише для некомерційного використання, а голоси StyleTTS2 названо на честь
+  справжніх дикторів, тож обидва типово вимкнені.
 
-License: Apache-2.0.
+## Розробка
 
-## License
+Образи збирає GitHub Actions (`.github/workflows/images.yml`) у `ghcr.io/voxarbor/node-<сервіс>`. Вони публічні,
+вхід не потрібен. Теги: `v<реліз>` (з кореневого `VERSION`), власна версія сервісу, `sha-<12>`, `latest`. На вузлах
+закріплюйте `VOICE_CORE_TAG=v<реліз>`. Тести `tests/test_speech.py` (обробка тексту, без моделей),
+`tests/test_pool.py` (черга) і `tests/test_connect.py` (конектор) запускаються всередині образів.
 
-Apache-2.0 (LICENSE). Models and third-party components keep their own licenses: see NOTICE (some are
-opt-in and non-commercial, e.g. NLLB-200).
+## Ліцензія
+
+Apache-2.0 (LICENSE). Моделі й сторонні компоненти мають власні ліцензії, див. NOTICE (деякі вмикаються лише за
+бажанням і некомерційні, як-от NLLB-200).
