@@ -129,11 +129,26 @@ class Project:
             out.append(line)
         if not done:
             out.append(f"VOICE_CORE_TAG={tag}")
+        st = os.stat(self.env_file)
         tmp = self.env_file + ".updater-tmp"
         with open(tmp, "w") as f:
             f.write("\n".join(out) + "\n")
-        shutil.copymode(self.env_file, tmp)
+        os.chmod(tmp, st.st_mode & 0o7777)
+        os.chown(tmp, st.st_uid, st.st_gid)  # the owner must keep running docker compose himself
         os.replace(tmp, self.env_file)
+
+    def own(self, path):
+        """files and folders the updater creates in the node folder belong to the folder's owner, not root"""
+        st = os.stat(self.wd)
+        paths = [path]
+        if os.path.isdir(path):
+            for root, dirs, files in os.walk(path):
+                paths += [os.path.join(root, x) for x in dirs + files]
+        for n in paths:
+            try:
+                os.lchown(n, st.st_uid, st.st_gid)
+            except OSError:
+                pass
 
 
 # ---------------------------------------------------------------- status -----------------------------------------
@@ -318,9 +333,12 @@ class Updater:
         log(f"updating {cur} -> {tag}")
         try:
             for n in man["files"]:
-                shutil.copyfile(os.path.join(self.cache, tag, n), os.path.join(self.p.wd, n))
+                dst = os.path.join(self.p.wd, n)
+                shutil.copyfile(os.path.join(self.cache, tag, n), dst)  # an existing file keeps owner and mode
                 if n.endswith(".sh"):
-                    os.chmod(os.path.join(self.p.wd, n), 0o755)
+                    os.chmod(dst, 0o755)
+                self.p.own(dst)
+            self.p.own(self.cache)
             self.p.set_tag(tag)
             cmd, env = self.p.compose()
             if self.opus_needed(man):
@@ -386,8 +404,8 @@ class Updater:
         if not ver(tag) or not ver(cur) or tag == cur:
             self.st.set(state="idle", available=None)
             return
-        if ver(tag) < ver(cur) and not ALLOW_DOWNGRADE:
-            self.st.set(state="idle", available=None, error=f"downgrade to {tag} refused")
+        if ver(tag) < ver(cur) and not ALLOW_DOWNGRADE:  # e.g. a coordinator that has not caught up yet
+            self.st.set(state="idle", available=None, error=f"desired {tag} is older than {cur}: ignored")
             return
         failed_at = (self.st.d.get("failed") or {}).get(tag)
         if failed_at and not (d.get("now") and d.get("received_at", "") > failed_at):
@@ -424,6 +442,11 @@ class Updater:
     def loop(self):
         log(f"node-updater {VERSION}, project {self.p.name} in {self.p.wd}, mode {ENV_MODE}")
         if self.st.d.get("pending_self"):
+            # first start after replacing myself: the previous updater image is free now, prune it too
+            cmd, env = self.p.compose()
+            pr = run(["sh", os.path.join(self.p.wd, "prune.sh")], check=False, env=dict(env, COMPOSE=" ".join(cmd)),
+                     timeout=1800)
+            log("prune after self-replacement:", (pr.stdout or pr.stderr).strip().splitlines()[-1:] or "")
             self.st.set(pending_self=None)
         while True:
             try:
