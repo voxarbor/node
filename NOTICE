@@ -28,6 +28,11 @@ Text-to-speech
 Translation and punctuation
 - Opus-MT tc-big models, Helsinki-NLP / University of Helsinki (Tiedemann et al.), converted to CTranslate2 -
   CC-BY-4.0
+  Since node-models-opus:2 (node 0.14.0) the en-zle model (Helsinki-NLP/opus-mt-tc-big-en-zle) is MODIFIED: fine-tuned
+  by the VoxArbor project on ~5k English phrases from our videos translated into Ukrainian by Claude (Anthropic), plus
+  5k general English sentences (WikiText-103, CC-BY-SA) translated by the original model (replay against forgetting);
+  then converted to CTranslate2 int8. The other pairs are unchanged. The fine-tuned model stays under CC-BY-4.0
+  (attribution: Helsinki-NLP / University of Helsinki, Tiedemann et al.). Recipe: tools/opus_finetune.
 - NLLB-200 distilled 600M, Meta (CTranslate2 conversion JustFrederik/nllb-200-distilled-600M-ct2-int8) -
   CC-BY-NC-4.0, NON-COMMERCIAL ONLY. OPT-IN (TRANSLATE_NLLB=1), off by default.
 - 1-800-BAD-CODE/xlm-roberta_punctuation_fullstop_truecase - Apache-2.0

@@ -273,6 +273,9 @@ and `engine`. Per service:
 
 ## Translation engine
 
+Since 0.14.0 the EN->UK model is our fine-tuned Opus-MT en-zle (`model_revision` `opus-models-2`, NOTICE,
+tools/opus_finetune); the other pairs are the original Opus-MT tc-big.
+
 Placeholders (since 0.13.6): a sentence whose output lost or doubled an `N0`/`N1`… token is translated again with a
 wider search (beam 6, 6 hypotheses) and the first hypothesis that keeps them all is used (our sets: 140/140).
 
@@ -302,7 +305,8 @@ diarize, 1024 for TTS and translate). Default mode `normal`. `/capabilities` rep
   `opus-mt/.models-version`; translate `/health` and `/capabilities` show it as `opus_models_version`.
 - Install: `docker compose pull && docker compose --profile init run --rm init-opus && docker compose up -d`.
 - Update (`./update.sh`): fresh node files, then
-  `want=$(sed -n 's/^OPUS_MODELS_TAG=//p' .env); want=${want:-1}`,
+  `want=$(docker compose config --format json | jq -r '.services["init-opus"].environment.OPUS_MODELS_TAG')` (compose's
+  own default, unless `.env` overrides it; 2 since 0.14.0),
   `have=$(docker compose run --rm --no-deps --entrypoint cat translate /cache/opus-mt/.models-version 2>/dev/null)`,
   `[ "$have" = "$want" ] || docker compose --profile init run --rm init-opus`, then `docker compose pull` and
   `docker compose up -d`, and finally `./prune.sh`.

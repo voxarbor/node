@@ -77,7 +77,7 @@ UPDATER_MODE=off       # не оновлюватися
 1. Візьміть нові `compose.yaml` і `compose.gpu.yaml` із тегу релізу та змініть `VOICE_CORE_TAG` у `.env`.
 2. Моделі перекладу копіюйте лише тоді, коли змінилася їхня версія (інакше кожне оновлення марно качатиме 3,7 ГБ):
    ```
-   want=$(sed -n 's/^OPUS_MODELS_TAG=//p' .env); want=${want:-1}
+   want=$(docker compose --profile init config --format json | python3 -c 'import json,sys;print(json.load(sys.stdin)["services"]["init-opus"]["environment"]["OPUS_MODELS_TAG"])')
    have=$(docker compose run --rm --no-deps --entrypoint cat translate /cache/opus-mt/.models-version 2>/dev/null)
    [ "$have" = "$want" ] || docker compose --profile init run --rm init-opus
    ```
