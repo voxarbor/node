@@ -72,6 +72,11 @@ login needed; tags `v<release>` from the root `VERSION`, the service's own versi
 files and a signed `manifest.json` to every release. Tests: `tests/test_speech.py` (text pipeline, no models),
 `tests/test_pool.py` (worker queue) and `tests/test_connect.py` (connector), run inside the images.
 
+## Community
+
+Questions, help with installation, news: [Спільнота в Telegram](https://t.me/+AnydDXHJOitjMmI0) (Telegram community, Ukrainian). Bugs and
+proposals: GitHub Issues.
+
 ## License
 
 Apache-2.0 (LICENSE). Models and third-party components keep their own licenses: see NOTICE (some are

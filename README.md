@@ -77,6 +77,10 @@ docker compose --env-file .env up -d
 підписаний `manifest.json`. Тести `tests/test_speech.py` (обробка тексту, без моделей), `tests/test_pool.py` (черга)
 і `tests/test_connect.py` (конектор) запускаються всередині образів.
 
+## Спільнота
+
+Питання, допомога зі встановленням, новини: [Спільнота в Telegram](https://t.me/+AnydDXHJOitjMmI0). Помилки й пропозиції: GitHub Issues.
+
 ## Ліцензія
 
 Apache-2.0 (LICENSE). Моделі й сторонні компоненти мають власні ліцензії, див. NOTICE (деякі вмикаються лише за
