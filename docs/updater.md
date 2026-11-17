@@ -100,12 +100,22 @@ How the updater runs compose like the owner does: it reads its own container lab
 the socket and reuses them. The node folder is mounted at the same absolute path inside the updater, so relative
 paths (`./Caddyfile`) resolve the same way. Works on Linux, WSL and Docker Desktop.
 
+## Opus-MT models version (since 0.14.1)
+
+The signed manifest's `opus_models_tag` decides the translation models version. On every update the updater removes a
+lower `OPUS_MODELS_TAG=` pin from `.env` (old installers wrote `1`, which silently kept nodes on the old models) and
+runs `init-opus` with the manifest's value. On a node that already runs the release but has older models (updated by
+updater ≤ 0.1.2 with such a pin) it reports `warnings: ["opus models 1 on the node, release v0.14.0 has 2"]` and fixes
+it in the next idle window (pull the models image by digest, copy, restart translate, prune). Installers must not
+write `OPUS_MODELS_TAG` into `.env`.
+
 ## Reported in /capabilities (node-info reads `status.json`, read-only)
 
 ```json
 "updater": {"version": "0.1.0", "mode": "auto", "state": "idle|downloading|waiting_window|updating|checking|rolled_back|error",
             "desired": "v0.13.0", "available": "v0.13.0",
-            "last_update": {"from": "v0.12.3", "to": "v0.13.0", "ok": true, "at": "2026-…Z", "error": null}}
+            "last_update": {"from": "v0.12.3", "to": "v0.13.0", "ok": true, "at": "2026-…Z", "error": null},
+            "warnings": []}
 ```
 The connector also sends it with its periodic capabilities, so the coordinator sees progress and rollbacks.
 

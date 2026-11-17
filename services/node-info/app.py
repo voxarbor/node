@@ -114,7 +114,7 @@ def updater() -> dict:
             st = json.load(f)
     except (OSError, ValueError):
         return {}
-    keys = ("version", "mode", "state", "desired", "available", "error", "seq", "last_update")
+    keys = ("version", "mode", "state", "desired", "available", "error", "seq", "last_update", "warnings")
     return {"updater": {k: st.get(k) for k in keys}}
 
 

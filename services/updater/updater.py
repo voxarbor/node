@@ -114,21 +114,30 @@ class Project:
             env.pop(k, None)
         return cmd, env
 
-    def tag(self):
+    def env_get(self, key):
         for line in open(self.env_file):
-            if line.startswith("VOICE_CORE_TAG="):
+            if line.startswith(key + "="):
                 return line.split("=", 1)[1].strip()
         return None
 
+    def tag(self):
+        return self.env_get("VOICE_CORE_TAG")
+
     def set_tag(self, tag):
+        self.env_write("VOICE_CORE_TAG", tag)
+
+    def env_write(self, key, value):
+        """set (value) or remove (None) one KEY= line of the owner's .env; nothing else changes"""
         lines = open(self.env_file).read().splitlines()
         out, done = [], False
         for line in lines:
-            if line.startswith("VOICE_CORE_TAG="):
-                line, done = f"VOICE_CORE_TAG={tag}", True
+            if line.startswith(key + "="):
+                if value is None:
+                    continue
+                line, done = f"{key}={value}", True
             out.append(line)
-        if not done:
-            out.append(f"VOICE_CORE_TAG={tag}")
+        if value is not None and not done:
+            out.append(f"{key}={value}")
         st = os.stat(self.env_file)
         tmp = self.env_file + ".updater-tmp"
         with open(tmp, "w") as f:
@@ -158,11 +167,11 @@ class Status:
         old = read_json(self.path, {}) or {}
         self.d = {"version": VERSION, "mode": ENV_MODE, "state": "idle", "desired": None, "available": None,
                   "error": None, "seq": int(old.get("seq", 0)), "last_update": old.get("last_update"),
-                  "failed": old.get("failed", {}), "pending_self": old.get("pending_self")}
+                  "failed": old.get("failed", {}), "pending_self": old.get("pending_self"), "warnings": []}
         self.save()
 
     def set(self, **kw):
-        public = ("mode", "state", "desired", "available", "error", "last_update")
+        public = ("mode", "state", "desired", "available", "error", "last_update", "warnings")
         if any(self.d.get(k) != v for k, v in kw.items() if k in public):
             self.d["seq"] += 1
         self.d.update(kw)
@@ -248,6 +257,8 @@ class Updater:
         self.prepared = {}  # tag -> manifest (verified, files in cache/<tag>)
         self.pulled = set()  # tags whose images are local
         self.idle_since = None
+        self._repaired = None  # release whose opus models were checked (repair)
+        self._repair_at = 0.0
 
     def files_for(self, tag):
         """the owner's compose files with the release's own ones taken from the verified cache"""
@@ -267,6 +278,26 @@ class Updater:
             elif not run(["docker", "image", "inspect", ref], check=False).returncode == 0:
                 raise RuntimeError(f"{ref} is neither in the release manifest nor present locally")
         return need
+
+    def opus_pin_fix(self, man):
+        """an old installer wrote OPUS_MODELS_TAG=1 into .env, which overrides compose's newer default: a pin lower
+        than the release's models version is removed (a higher one, set on purpose, stays)"""
+        pin, want = self.p.env_get("OPUS_MODELS_TAG"), str(man.get("opus_models_tag", "1"))
+        if pin and pin.isdigit() and want.isdigit() and int(pin) < int(want):
+            self.p.env_write("OPUS_MODELS_TAG", None)
+            log(f"removed the stale OPUS_MODELS_TAG={pin} from .env (release models: {want})")
+
+    def opus_have(self):
+        cmd, env = self.p.compose()
+        r = run(cmd + ["run", "--rm", "--no-deps", "--entrypoint", "cat", "translate",
+                       "/cache/opus-mt/.models-version"], check=False, env=env, timeout=300)
+        return r.stdout.strip() or None
+
+    def opus_install(self, man):
+        """copies the release's Opus-MT models into the translate volume (init-opus), with the manifest's version"""
+        want = str(man.get("opus_models_tag", "1"))
+        cmd, env = self.p.compose(extra_env={"OPUS_MODELS_TAG": want})
+        run(cmd + ["--profile", "init", "run", "--rm", "init-opus"], env=env, timeout=1800)
 
     def opus_needed(self, man):
         want = str(man.get("opus_models_tag", "1"))
@@ -343,9 +374,9 @@ class Updater:
                 self.p.own(dst)
             self.p.own(self.cache)
             self.p.set_tag(tag)
-            cmd, env = self.p.compose()
+            self.opus_pin_fix(man)
             if self.opus_needed(man):
-                run(cmd + ["--profile", "init", "run", "--rm", "init-opus"], env=env, timeout=1800)
+                self.opus_install(man)
             self.up()
             self.st.set(state="checking")
             deadline, ok_since, why = time.time() + HEALTH_MIN * 60, None, "timeout"
@@ -394,6 +425,45 @@ class Updater:
              "-e", "UPDATER_REPLACE=" + json.dumps(cmd), "--entrypoint", "python", new, "updater.py", "replace"])
 
     # ------------------------------------------------------------ main loop
+    def repair(self, cur):
+        """the node runs release `cur`, but its Opus-MT models are older than that release's: report it, and in an
+        idle window (not paused, mode not off) pull the models image by digest and copy the models"""
+        if not ver(cur) or self._repaired == cur or time.monotonic() - self._repair_at < 60:
+            return
+        self._repair_at = time.monotonic()  # each check starts a short container: at most once a minute
+        try:
+            man = self.prepared.get(cur) or read_json(os.path.join(self.cache, cur, "manifest.json"))
+            if not man:
+                man = self.prepared[cur] = fetch_release(cur, os.path.join(self.cache, cur))
+            if not self.opus_needed(man):
+                self._repaired = cur
+                self.st.set(warnings=[])
+                return
+            have, want = self.opus_have(), str(man.get("opus_models_tag"))
+            self.st.set(warnings=[f"opus models {have} on the node, release {cur} has {want}"])
+            if effective_mode(desired()) == "off" or desired().get("paused"):
+                return
+            quiet = busy_streams() in (0, None) and tts_idle()
+            self.idle_since = (self.idle_since or time.time()) if quiet else None
+            if self.idle_since is None or time.time() - self.idle_since < WINDOW_S:
+                return
+            log(f"repair: opus models {have} -> {want}")
+            self.opus_pin_fix(man)
+            oi = man.get("opus_image")
+            if oi:
+                run(["docker", "pull", "-q", oi["digest_ref"]], timeout=3600)
+                run(["docker", "tag", oi["digest_ref"], oi["ref"]])
+            self.opus_install(man)
+            cmd, env = self.p.compose()
+            run(cmd + ["restart", "translate"], env=env, timeout=300)
+            pr = run(["sh", os.path.join(self.p.wd, "prune.sh")], check=False, env=dict(env, COMPOSE=" ".join(cmd)),
+                     timeout=1800)
+            log("repair done; prune:", (pr.stdout or pr.stderr).strip().splitlines()[-1:] or "")
+            self._repaired = cur
+            self.st.set(warnings=[])
+        except Exception as exc:  # noqa: BLE001
+            log("repair:", exc)
+
     def step(self):
         d = desired()
         mode = effective_mode(d)
@@ -406,6 +476,7 @@ class Updater:
             return
         if not ver(tag) or not ver(cur) or tag == cur:
             self.st.set(state="idle", available=None)
+            self.repair(cur)
             return
         if ver(tag) < ver(cur) and not ALLOW_DOWNGRADE:  # e.g. a coordinator that has not caught up yet
             self.st.set(state="idle", available=None, error=f"desired {tag} is older than {cur}: ignored")
