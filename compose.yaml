@@ -6,6 +6,7 @@ x-common: &common
   restart: unless-stopped
   environment: &env
     API_KEY: ${NODE_TOKEN:?set NODE_TOKEN in .env}
+    NODE_MODE: ${NODE_MODE:-normal}   # gentle: one task at a time, half the CPU threads (docs/gateway.md)
   logging:
     driver: json-file
     options: { max-size: "10m", max-file: "3" }
@@ -30,7 +31,6 @@ services:
     environment:
       <<: *env
       VOICE_CORE_VERSION: ${VOICE_CORE_TAG:-v0.12.3}
-      NODE_MODE: ${NODE_MODE:-normal}
       STT_MODEL: ${STT_MODEL:-deepdml/faster-whisper-large-v3-turbo-ct2}
       STT_IMAGE: ghcr.io/speaches-ai/speaches:0.8.3-cpu
       TTS_IMAGE: ${REGISTRY:-ghcr.io/voxarbor}/node-tts:${VOICE_CORE_TAG:-v0.12.3}
@@ -43,17 +43,20 @@ services:
 
   stt:
     <<: *common
-    extends: { file: "modes/${NODE_MODE:-normal}.yaml", service: stt }
     image: ghcr.io/speaches-ai/speaches:0.8.3-cpu   # upstream public image, pinned
     environment:
       <<: *env
       WHISPER__INFERENCE_DEVICE: cpu
       WHISPER__COMPUTE_TYPE: int8
+      WHISPER__CPU_THREADS: ${STT_THREADS:-4}
       WHISPER__TTL: "600"
       ENABLE_UI: "false"
       MALLOC_ARENA_MAX: "2"
       MALLOC_MMAP_THRESHOLD_: "131072"
       MALLOC_TRIM_THRESHOLD_: "131072"
+    # the image's own command; NODE_MODE=gentle halves WHISPER__CPU_THREADS first
+    command: ["sh", "-c", "if [ \"$$NODE_MODE\" = gentle ]; then t=$$((WHISPER__CPU_THREADS / 2)); export WHISPER__CPU_THREADS=$$((t > 0 ? t : 1)); fi; exec uvicorn --factory speaches.main:create_app"]
+    cpu_shares: ${NODE_CPU_SHARES:-256}   # batch: live TTS wins under contention; gentle nodes may set 128
     volumes:
       - hf-cache:/home/ubuntu/.cache/huggingface/hub
     deploy:
@@ -62,12 +65,12 @@ services:
 
   tts:
     <<: *common
-    extends: { file: "modes/${NODE_MODE:-normal}.yaml", service: tts }
     image: ${REGISTRY:-ghcr.io/voxarbor}/node-tts:${VOICE_CORE_TAG:-v0.12.3}
     environment:
       <<: *env
       ENABLE_UI: "false"   # compose.ui.yaml turns the web UI on
       IDLE_TTL: "600"
+      TORCH_THREADS: ${TTS_THREADS:-2}
       TTS_DEFAULT_ENGINE: holos
       TTS_ENGINES: ${TTS_ENGINES:-holos}   # add ,styletts2 to enable StyleTTS2 (see NOTICE)
       TTS_STRESS: accentuk
@@ -76,6 +79,7 @@ services:
       TTS_VERBALIZER: accentuk
       TTS_JOBS_DIR: /jobs
       MALLOC_ARENA_MAX: "2"
+    cpu_shares: ${NODE_CPU_SHARES:-1024}
     volumes:
       - tts-cache:/cache
       - tts-config:/config
@@ -86,15 +90,16 @@ services:
 
   translate:
     <<: *common
-    extends: { file: "modes/${NODE_MODE:-normal}.yaml", service: translate }
     image: ${REGISTRY:-ghcr.io/voxarbor}/node-translate:${VOICE_CORE_TAG:-v0.12.3}
     environment:
       <<: *env
       TRANSLATE_MODEL: nllb-600m
       TRANSLATE_MAX_MODELS: "3"
+      TRANSLATE_THREADS: ${TRANSLATE_THREADS:-2}
       TRANSLATE_NLLB: ${TRANSLATE_NLLB:-0}   # 1 = NLLB-200 fallback for other languages (CC-BY-NC, see NOTICE)
       IDLE_TTL: "600"
       MALLOC_ARENA_MAX: "2"
+    cpu_shares: ${NODE_CPU_SHARES:-1024}
     volumes:
       - translate-cache:/cache
     deploy:
@@ -103,12 +108,13 @@ services:
 
   diarize:
     <<: *common
-    extends: { file: "modes/${NODE_MODE:-normal}.yaml", service: diarize }
     image: ${REGISTRY:-ghcr.io/voxarbor}/node-diarize:${VOICE_CORE_TAG:-v0.12.3}
     environment:
       <<: *env
       IDLE_TTL: "600"
+      DIARIZE_THREADS: ${DIARIZE_THREADS:-2}
       MALLOC_ARENA_MAX: "2"
+    cpu_shares: ${NODE_CPU_SHARES:-256}   # batch: live TTS wins under contention; gentle nodes may set 128
     tmpfs:
       - /tmp/diarize:uid=65534,gid=65534,size=3g
     deploy:
@@ -118,13 +124,13 @@ services:
   # outbound link to a coordinator (docs/connect.md): only active with COORDINATOR_URL, otherwise it idles
   connector:
     <<: *common
-    extends: { file: "modes/${NODE_MODE:-normal}.yaml", service: connector }
     image: ${REGISTRY:-ghcr.io/voxarbor}/node-connector:${VOICE_CORE_TAG:-v0.12.3}
     environment:
       <<: *env
       COORDINATOR_URL: ${COORDINATOR_URL:-}
       NODE_JOIN_CODE: ${NODE_JOIN_CODE:-}
       NODE_NAME: ${NODE_NAME:-}
+      CONNECT_MAX_STREAMS: ${CONNECT_MAX_STREAMS:-16}
     volumes:
       - connector-state:/state
     depends_on: [gateway]

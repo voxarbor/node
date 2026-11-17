@@ -10,7 +10,7 @@ import numpy as np
 SR = 16000
 SEG_MODEL = os.environ.get("DIARIZE_SEG_MODEL", "/models/segmentation/model.onnx")
 EMB_MODEL = os.environ.get("DIARIZE_EMB_MODEL", "/models/embedding.onnx")
-THREADS = int(os.environ.get("DIARIZE_THREADS", "4"))
+THREADS = (lambda n: max(1, n // 2) if os.environ.get("NODE_MODE") == "gentle" else n)(int(os.environ.get("DIARIZE_THREADS", "4")))  # NODE_MODE=gentle: half
 THRESHOLD = float(os.environ.get("DIARIZE_THRESHOLD", "0.5"))
 FEMALE_HZ, MALE_HZ = 165.0, 150.0  # pitch fallback: median F0 above / below -> female / male
 MERGE_SIM = float(os.environ.get("DIARIZE_MERGE_SIM", "0.88"))  # same-gender clusters this similar = one person

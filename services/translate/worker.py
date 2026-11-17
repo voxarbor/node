@@ -31,7 +31,7 @@ LANGS = {
 ISO = {v: k for k, v in LANGS.items()}
 MAX_TOKENS = 400
 MAX_LOADED = int(os.environ.get("TRANSLATE_MAX_MODELS", "3"))
-THREADS = int(os.environ.get("TRANSLATE_THREADS", "4"))
+THREADS = (lambda n: max(1, n // 2) if os.environ.get("NODE_MODE") == "gentle" else n)(int(os.environ.get("TRANSLATE_THREADS", "4")))  # NODE_MODE=gentle: half
 _models: "OrderedDict[str, tuple]" = OrderedDict()  # name -> (translator, encode, decode), least recently used first
 
 

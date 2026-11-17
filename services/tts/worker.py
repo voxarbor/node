@@ -168,7 +168,7 @@ def device() -> str:
 def init() -> None:
     import torch
 
-    torch.set_num_threads(int(os.environ.get("TORCH_THREADS", "4")))
+    torch.set_num_threads((lambda n: max(1, n // 2) if os.environ.get("NODE_MODE") == "gentle" else n)(int(os.environ.get("TORCH_THREADS", "4"))))  # NODE_MODE=gentle: half
     try:
         with open(DEVICE_FILE, "w") as f:
             f.write(device())

@@ -31,7 +31,7 @@ GATEWAY = os.environ.get("GATEWAY_URL", "http://gateway:8080")
 LOCAL_TOKEN = os.environ.get("API_KEY", "")  # the node's own gateway token (NODE_TOKEN); never sent to the coordinator
 JOIN_CODE = os.environ.get("NODE_JOIN_CODE", "").strip()
 NODE_NAME = os.environ.get("NODE_NAME", "").strip() or os.uname().nodename
-MAX_STREAMS = int(os.environ.get("CONNECT_MAX_STREAMS", "16"))
+MAX_STREAMS = 1 if os.environ.get("NODE_MODE") == "gentle" else int(os.environ.get("CONNECT_MAX_STREAMS", "16"))  # gentle: one task at a time
 INSECURE = os.environ.get("CONNECT_INSECURE_TLS", "") == "1"
 STATE_DIR = os.environ.get("CONNECT_STATE_DIR", "/state")
 STATE = os.path.join(STATE_DIR, "node.json")
