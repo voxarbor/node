@@ -13,8 +13,13 @@ used=$($COMPOSE config --images 2>/dev/null | sort -u)
 [ -n "$used" ] || { echo "ПОМИЛКА: docker compose config не віддав образів, нічого не видаляю" >&2; exit 1; }
 before=$(df -B1 --output=used /var/lib/docker 2>/dev/null | tail -1 || echo 0)
 n=0
+# images any container on this host uses (running or stopped, any compose project): never untag those, so a second
+# project on the same host (another node, a test stand) keeps its images
+in_use=$($DOCKER ps -aq | xargs -r $DOCKER inspect --format '{{.Image}}' 2>/dev/null | sort -u)
 for ref in $($DOCKER images --format '{{.Repository}}:{{.Tag}}' | grep -E '^(ghcr\.io/voxarbor/node-|ghcr\.io/speaches-ai/speaches:)' | grep -v ':<none>$'); do
   echo "$used" | grep -qx "$ref" && continue
+  id=$($DOCKER image inspect --format '{{.Id}}' "$ref" 2>/dev/null)
+  if [ -n "$id" ] && echo "$in_use" | grep -qx "$id"; then echo "kept $ref (used by a container)"; continue; fi
   if [ -n "$DRY" ]; then echo "would remove $ref"; n=$((n + 1)); continue; fi
   $DOCKER image rm "$ref" >/dev/null 2>&1 && { echo "removed $ref"; n=$((n + 1)); } || echo "kept $ref (in use by a container)"
 done

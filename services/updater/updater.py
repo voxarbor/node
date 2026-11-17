@@ -271,6 +271,9 @@ class Updater:
     def opus_needed(self, man):
         want = str(man.get("opus_models_tag", "1"))
         cmd, env = self.p.compose()
+        services = run(cmd + ["--profile", "init", "config", "--services"], env=env, check=False).stdout.split()
+        if "translate" not in services or "init-opus" not in services:
+            return False  # a node (or a test stand) without the Opus-MT models volume
         r = run(cmd + ["run", "--rm", "--no-deps", "--entrypoint", "cat", "translate",
                        "/cache/opus-mt/.models-version"], check=False, env=env, timeout=300)
         return r.stdout.strip() != want

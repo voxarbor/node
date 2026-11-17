@@ -27,16 +27,16 @@ services:
 
   node-info:
     <<: *common
-    image: ${REGISTRY:-ghcr.io/voxarbor}/node-node-info:${VOICE_CORE_TAG:-v0.13.3}
+    image: ${REGISTRY:-ghcr.io/voxarbor}/node-node-info:${VOICE_CORE_TAG:-v0.13.4}
     environment:
       <<: *env
-      VOICE_CORE_VERSION: ${VOICE_CORE_TAG:-v0.13.3}
+      VOICE_CORE_VERSION: ${VOICE_CORE_TAG:-v0.13.4}
       STT_MODEL: ${STT_MODEL:-deepdml/faster-whisper-large-v3-turbo-ct2}
       STT_IMAGE: ghcr.io/speaches-ai/speaches:0.8.3-cpu
-      TTS_IMAGE: ${REGISTRY:-ghcr.io/voxarbor}/node-tts:${VOICE_CORE_TAG:-v0.13.3}
-      TRANSLATE_IMAGE: ${REGISTRY:-ghcr.io/voxarbor}/node-translate:${VOICE_CORE_TAG:-v0.13.3}
-      DIARIZE_IMAGE: ${REGISTRY:-ghcr.io/voxarbor}/node-diarize:${VOICE_CORE_TAG:-v0.13.3}
-      FETCH_IMAGE: ${REGISTRY:-ghcr.io/voxarbor}/node-fetch:${VOICE_CORE_TAG:-v0.13.3}
+      TTS_IMAGE: ${REGISTRY:-ghcr.io/voxarbor}/node-tts:${VOICE_CORE_TAG:-v0.13.4}
+      TRANSLATE_IMAGE: ${REGISTRY:-ghcr.io/voxarbor}/node-translate:${VOICE_CORE_TAG:-v0.13.4}
+      DIARIZE_IMAGE: ${REGISTRY:-ghcr.io/voxarbor}/node-diarize:${VOICE_CORE_TAG:-v0.13.4}
+      FETCH_IMAGE: ${REGISTRY:-ghcr.io/voxarbor}/node-fetch:${VOICE_CORE_TAG:-v0.13.4}
     volumes:
       - updater-ctl:/ctl:ro       # node-updater status for /capabilities.updater
       - hf-cache:/hf:ro           # only to read the Whisper model's revision
@@ -58,7 +58,7 @@ services:
       MALLOC_MMAP_THRESHOLD_: "131072"
       MALLOC_TRIM_THRESHOLD_: "131072"
     # the image's own command; NODE_MODE=gentle halves WHISPER__CPU_THREADS first
-    command: ["sh", "-c", "if [ \"$$NODE_MODE\" = gentle ]; then t=$$((WHISPER__CPU_THREADS / 2)); export WHISPER__CPU_THREADS=$$((t > 0 ? t : 1)); fi; exec uvicorn --factory speaches.main:create_app"]
+    command: ["sh", "-c", "if [ \"$$NODE_MODE\" = gentle ]; then t=$$((WHISPER__CPU_THREADS / 2)); export WHISPER__CPU_THREADS=$$((t > 0 ? t : 1)); fi; exec uvicorn --factory speaches.main:create_app --no-access-log"]   # no line per /health poll
     cpu_shares: ${NODE_CPU_SHARES:-256}   # batch: live TTS wins under contention; gentle nodes may set 128
     volumes:
       - hf-cache:/home/ubuntu/.cache/huggingface/hub
@@ -68,7 +68,7 @@ services:
 
   tts:
     <<: *common
-    image: ${REGISTRY:-ghcr.io/voxarbor}/node-tts:${VOICE_CORE_TAG:-v0.13.3}
+    image: ${REGISTRY:-ghcr.io/voxarbor}/node-tts:${VOICE_CORE_TAG:-v0.13.4}
     environment:
       <<: *env
       ENABLE_UI: "false"   # compose.ui.yaml turns the web UI on
@@ -93,7 +93,7 @@ services:
 
   translate:
     <<: *common
-    image: ${REGISTRY:-ghcr.io/voxarbor}/node-translate:${VOICE_CORE_TAG:-v0.13.3}
+    image: ${REGISTRY:-ghcr.io/voxarbor}/node-translate:${VOICE_CORE_TAG:-v0.13.4}
     environment:
       <<: *env
       TRANSLATE_MODEL: nllb-600m
@@ -111,7 +111,7 @@ services:
 
   diarize:
     <<: *common
-    image: ${REGISTRY:-ghcr.io/voxarbor}/node-diarize:${VOICE_CORE_TAG:-v0.13.3}
+    image: ${REGISTRY:-ghcr.io/voxarbor}/node-diarize:${VOICE_CORE_TAG:-v0.13.4}
     environment:
       <<: *env
       IDLE_TTL: "120"
@@ -127,7 +127,7 @@ services:
   # outbound link to a coordinator (docs/connect.md): only active with COORDINATOR_URL, otherwise it idles
   connector:
     <<: *common
-    image: ${REGISTRY:-ghcr.io/voxarbor}/node-connector:${VOICE_CORE_TAG:-v0.13.3}
+    image: ${REGISTRY:-ghcr.io/voxarbor}/node-connector:${VOICE_CORE_TAG:-v0.13.4}
     environment:
       <<: *env
       COORDINATOR_URL: ${COORDINATOR_URL:-}
@@ -146,7 +146,7 @@ services:
   fetch:
     <<: *common
     profiles: ["fetch"]
-    image: ${REGISTRY:-ghcr.io/voxarbor}/node-fetch:${VOICE_CORE_TAG:-v0.13.3}
+    image: ${REGISTRY:-ghcr.io/voxarbor}/node-fetch:${VOICE_CORE_TAG:-v0.13.4}
     environment:
       <<: *env
       QUEUE_MAX: ${FETCH_QUEUE_MAX:-4}
@@ -178,7 +178,7 @@ services:
   # UPDATER_MODE=auto | notify | off in .env (the stricter of this and the coordinator's setting wins).
   updater:
     <<: *common
-    image: ${REGISTRY:-ghcr.io/voxarbor}/node-updater:${VOICE_CORE_TAG:-v0.13.3}
+    image: ${REGISTRY:-ghcr.io/voxarbor}/node-updater:${VOICE_CORE_TAG:-v0.13.4}
     environment:
       <<: *env
       UPDATER_MODE: ${UPDATER_MODE:-auto}
@@ -195,7 +195,7 @@ services:
   # one-shot: the Whisper model into STT (idempotent)
 
   init-stt:
-    image: ${REGISTRY:-ghcr.io/voxarbor}/node-node-info:${VOICE_CORE_TAG:-v0.13.3}
+    image: ${REGISTRY:-ghcr.io/voxarbor}/node-node-info:${VOICE_CORE_TAG:-v0.13.4}
     command: ["python", "init_models.py"]
     environment:
       <<: *env
