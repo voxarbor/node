@@ -181,7 +181,7 @@ def summary(samples, phase):
 caps = json.loads(req("GET", "/capabilities")[1])
 SVC = caps.get("services", {})
 STT_MODEL = SVC.get("stt", {}).get("model") or "deepdml/faster-whisper-large-v3-turbo-ct2"
-res = {"product": caps.get("product"), "version": caps.get("product_version") or caps.get("version"),
+res = {"product": caps.get("product"), "mode": (caps.get("node") or {}).get("mode", "normal"), "version": caps.get("product_version") or caps.get("version"),
        "date": time.strftime("%Y-%m-%d %H:%M %Z"), "host": {"cpus": os.cpu_count(),
        "cpu": next((l.split(":", 1)[1].strip() for l in open("/proc/cpuinfo") if l.startswith("model name")), "?"),
        "mem_gb": round(int(open("/proc/meminfo").readline().split()[1]) / 1024 ** 2, 1)},
@@ -307,7 +307,10 @@ if "first" in phases:
 if "together" in phases:
     phase("together")
     segs = transcript or [uk_text]
-    with ThreadPoolExecutor(4) as ex:
+    # gentle node: the connector takes one task at a time, so the coordinator's tasks arrive one after another
+    serial = (caps.get("node") or {}).get("mode") == "gentle"
+    t_together = time.monotonic()
+    with ThreadPoolExecutor(1 if serial else 4) as ex:
         f_stt = ex.submit(stt, clip)
         f_dia = ex.submit(diarize, clip)
         f_tr = ex.submit(lambda: [translate(segs)[1] for _ in range(3)])
@@ -318,7 +321,8 @@ if "together" in phases:
         tst, tfi = f_tts.result()
     R["together"] = {"stt_rtf": round(s_stt / clip_s, 3), "diarize_rtf": round(s_dia / clip_s, 3),
                      "translate_s": round(sum(trs) / len(trs), 2), "tts_first_audio": tst["first_audio_s"],
-                     "tts_rtf": tfi["rtf"]}
+                     "tts_rtf": tfi["rtf"], "wall_s": round(time.monotonic() - t_together, 1),
+                     "mode": "serial (gentle)" if serial else "parallel"}
 phase("end"); time.sleep(1.5)
 smp.stop_ = True; smp.join(); probe.stop_ = True; probe.join()
 for p in dict.fromkeys(s["phase"] for s in smp.samples):
