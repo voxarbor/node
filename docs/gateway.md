@@ -282,7 +282,7 @@ and `engine`. Per service:
 
 ## Translation engine
 
-Since 0.14.0 the EN->UK model is our fine-tuned Opus-MT en-zle (`model_revision` `opus-models-2`, NOTICE,
+Since 0.16.2 the EN->UK model is our third fine-tune of Opus-MT en-zle (`model_revision` `opus-models-3`; 0.14.0: `opus-models-2`; NOTICE,
 tools/opus_finetune); the other pairs are the original Opus-MT tc-big.
 
 Placeholders (since 0.13.6): a sentence whose output lost or doubled an `N0`/`N1`… token is translated again with a
