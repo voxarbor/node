@@ -1,6 +1,6 @@
 # Node connect: outbound link to a coordinator (protocol 1)
 
-Status: implemented in VoxArbor Node (then voice-core) 0.10.0 (service `connector`, approved 2026-11-15). Enable on a node: set
+Status: implemented in VoxArbor Node 0.10.0 (service `connector`, approved 2026-11-15). Enable on a node: set
 `COORDINATOR_URL` and `NODE_JOIN_CODE` (and optionally `NODE_NAME`) in `.env`, then `docker compose up -d`; check
 `docker compose exec connector python -c "import urllib.request;print(urllib.request.urlopen('http://127.0.0.1:8000/health').read().decode())"`
 or its log. Self-check: `tests/test_connect.py` (fake coordinator + fake gateway). Nothing in the existing gateway contract (`docs/gateway.md`) changes; this adds a
@@ -57,7 +57,7 @@ and new (node dials the coordinator) setups run side by side.
 ## Connection
 
 `GET wss://coord.example/v1/nodes/connect` with headers `Authorization: Bearer <node_token>`,
-`X-Voice-Core-Protocol: 1`. TLS required (`ws://` only for `localhost` / tests). One connection per node: a second
+`X-VoxArbor-Node-Protocol: 1`. TLS required (`ws://` only for `localhost` / tests). One connection per node: a second
 connection with the same token replaces the first (the old one is closed with 4003).
 
 Frames:
@@ -69,7 +69,7 @@ Frames:
 
 | direction | frame | fields |
 |---|---|---|
-| node -> coord | `hello` | `protocol: 1`, `node_name` (`NODE_NAME`), `max_streams` (`CONNECT_MAX_STREAMS`), `connector_version`, `voice_core_version`, `capabilities` (the full `/capabilities` object, schema 1) |
+| node -> coord | `hello` | `protocol: 1`, `node_name` (`NODE_NAME`), `max_streams` (`CONNECT_MAX_STREAMS`), `connector_version`, `voxarbor_node_version`, `capabilities` (the full `/capabilities` object, schema 1) |
 | coord -> node | `welcome` | `protocol: 1`, `node_id`, `heartbeat_s` (the coordinator sets it; 10 s recommended, 5-60 accepted), `max_streams` (≤ the node's) |
 | node -> coord | `caps` | `capabilities`: sent every 30 s and immediately when a service, voice, lexicon hash or version changes |
 | coord -> node | `caps_get` | asks for a `caps` now |

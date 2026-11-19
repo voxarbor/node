@@ -101,19 +101,7 @@ How the updater runs compose like the owner does: it reads its own container lab
 the socket and reuses them. The node folder is mounted at the same absolute path inside the updater, so relative
 paths (`./Caddyfile`) resolve the same way. Works on Linux, WSL and Docker Desktop.
 
-## Project rename (0.15.0)
-
-When `compose.yaml` names a project (`name: voxarbor-node`) other than the one the stack runs under
-(`voice-core-worker`, or `voice-core` on a custom layout), the updater moves the node in an idle window: it stops the
-old services (no volume is removed), copies every volume to its new name (`docker volume create` with the compose
-labels, then `cp -a` in a short container, only into an empty volume), starts the new project, joins its network and
-checks health for up to `UPDATER_HEALTH_MIN` minutes. On success the old updater container removes itself, the new
-one takes over; the old volumes are removed a day later if the node is healthy (`.updater/migration.json`). On
-failure the new project goes down (without `-v`) and the old one comes back; the attempt is repeated after a day or on
-`now`. Volumes with explicit names (external volumes of an override) are left as they are. The node folder is not
-moved (bind mounts point at it).
-
-Also since 0.15.0: the updater removes `NODE_JOIN_CODE` from `.env` once the connector is enrolled and connected.
+The updater also removes `NODE_JOIN_CODE` from `.env` once the connector is enrolled and connected.
 
 ## Opus-MT models version (since 0.14.1)
 

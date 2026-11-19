@@ -25,7 +25,7 @@ from websockets.asyncio.client import connect
 from websockets.exceptions import ConnectionClosed, InvalidStatus
 
 VERSION = os.environ.get("CONNECTOR_VERSION", "dev")
-RELEASE = os.environ.get("VOICE_CORE_RELEASE", "dev")
+RELEASE = os.environ.get("VOXARBOR_NODE_RELEASE", "dev")  # baked into the image by CI
 COORDINATOR_URL = os.environ.get("COORDINATOR_URL", "").strip().rstrip("/")
 GATEWAY = os.environ.get("GATEWAY_URL", "http://gateway:8080")
 LOCAL_TOKEN = os.environ.get("API_KEY", "")  # the node's own gateway token (NODE_TOKEN); never sent to the coordinator
@@ -523,7 +523,6 @@ class Link:
 async def session(http: aiohttp.ClientSession, state: dict) -> None:
     url = ws_url(COORDINATOR_URL)
     headers = {"Authorization": f"Bearer {state['node_token']}", "X-VoxArbor-Node-Protocol": str(PROTOCOL),
-               "X-Voice-Core-Protocol": str(PROTOCOL),  # the old name, until every node runs 0.15+
                "User-Agent": UA}
     try:
         ws_ctx = connect(url, additional_headers=headers, ssl=ssl_context() if url.startswith("wss") else None,
@@ -540,8 +539,7 @@ async def session(http: aiohttp.ClientSession, state: dict) -> None:
                 caps = {"schema": 1, "error": "local capabilities unavailable"}
             await ws.send(json.dumps({"type": "hello", "protocol": PROTOCOL, "node_name": NODE_NAME,
                                       "max_streams": MAX_STREAMS, "connector_version": VERSION,
-                                      "voxarbor_node_version": caps.get("voxarbor_node_version", caps.get("voice_core_version", RELEASE)),
-                                      "voice_core_version": caps.get("voice_core_version", RELEASE),
+                                      "voxarbor_node_version": caps.get("voxarbor_node_version", RELEASE),
                                       "capabilities": caps}, ensure_ascii=False))
             welcome = json.loads(await asyncio.wait_for(ws.recv(), 20))
             if welcome.get("type") != "welcome":

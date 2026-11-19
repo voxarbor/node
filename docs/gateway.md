@@ -80,8 +80,8 @@ Timing: info/subs take 5–40 s (JS challenge solving), so give them a 120 s cli
 
 ## GET /capabilities (schema 1)
 
-Fields are only added within a schema version. `voice_core_version` is the release the node runs: its pinned `VOICE_CORE_TAG`, or, when it pins
-`latest`, the release baked into the node-info image (since 0.7.4; also `voice_core_tag` and `voice_core_release`). `services.<name>.available` = reachable, `healthy` = its health is OK,
+Fields are only added within a schema version. `voxarbor_node_version` is the release the node runs: its pinned `VOXARBOR_NODE_TAG`, or, when it pins
+`latest`, the release baked into the node-info image (since 0.7.4; also `voxarbor_node_tag` and `voxarbor_node_release`). `services.<name>.available` = reachable, `healthy` = its health is OK,
 `busy` = jobs submitted and not finished, `queue_max` = above it the service answers 429, `loaded` = models in RAM.
 `tts.lexicon_sha256` (sha256 of the lexicon file text, as `GET /tts/v1/lexicon` returns it) and `lexicon_rules`
 let a coordinator check that a node's stress lexicon matches its source; push a new one with `PUT /tts/v1/lexicon`.
@@ -90,12 +90,12 @@ A service whose /health is slow (over 3 s) keeps its last known state for up to 
 `available: false`.
 TTS gives every voice's `genders` (male | female | child) and display `labels`; `voices` order = priority (favorites
 first). Real example from a test node (lists shortened with "..."; `local_ai_version` is a deprecated alias of
-`voice_core_version`):
+`voxarbor_node_version`):
 
 ```json
 {
   "schema": 1,
-  "voice_core_version": "0.6.0", "local_ai_version": "0.6.0",
+  "product": "voxarbor-node", "product_version": "v0.16.0", "voxarbor_node_version": "v0.16.0",
   "generated_at": "2026-11-14T07:41:46Z",
   "node": {
     "cpu_cores": 7,
@@ -325,13 +325,9 @@ diarize, 1024 for TTS and translate). Default mode `normal`. `/capabilities` rep
 - Images share layers: tts and diarize are built on node-base-av (python + ffmpeg) and node-base-torch (cpu or
   cu128), so a node stores ffmpeg and torch once.
 
-## Names (since 0.15.0)
+## Names
 
-Everything a person sees on the node is called voxarbor-node: the compose project `voxarbor-node` (containers
+Everything on a node is called voxarbor-node: the compose project `voxarbor-node` (containers
 `voxarbor-node-<service>-1`, volumes `voxarbor-node_*`), the `.env` variable `VOXARBOR_NODE_TAG`, the folder
-`~/voxarbor-node` of new installs, the protocol header `X-VoxArbor-Node-Protocol` and the `/capabilities` keys
-`voxarbor_node_version`, `voxarbor_node_tag`, `voxarbor_node_release`. Until the three nodes of the 0.14 era have
-updated, the old names are also sent / read: `X-Voice-Core-Protocol`, `voice_core_*` keys, `VOICE_CORE_TAG` (compose
-falls back to it; the updater rewrites it to `VOXARBOR_NODE_TAG`). The updater moves a running node to the new
-project by itself (docs/updater.md «Project rename»): volumes are copied, models are not downloaded again. The
-repository stays voxarbor/node; image names did not change.
+`~/voxarbor-node`, the protocol header `X-VoxArbor-Node-Protocol` and the `/capabilities` keys `voxarbor_node_version`,
+`voxarbor_node_tag`, `voxarbor_node_release` (plus `product`, `product_version`). Images: `ghcr.io/voxarbor/node-*`.

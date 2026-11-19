@@ -19,7 +19,7 @@ events: dict = {"enroll": [], "hello": None, "auth": [], "frames": []}
 # ---------------------------------------------------------------- fake gateway -----------------------------------
 async def gw_caps(r):
     assert r.headers.get("Authorization") == "Bearer local", r.headers.get("Authorization")
-    return web.json_response({"schema": 1, "voice_core_version": "v9.9.9", "services": {}, "generated_at": str(time.time())})
+    return web.json_response({"schema": 1, "voxarbor_node_version": "v9.9.9", "services": {}, "generated_at": str(time.time())})
 
 
 async def gw_echo(r):
@@ -86,7 +86,7 @@ class Coord:
                             headers={"Content-Encoding": "gzip", "Content-Type": "application/json"})
 
     async def connect(self, r):
-        events["auth"].append((r.headers.get("Authorization"), r.headers.get("X-Voice-Core-Protocol")))
+        events["auth"].append((r.headers.get("Authorization"), r.headers.get("X-VoxArbor-Node-Protocol")))
         if r.headers.get("Authorization") not in ("Bearer tok-1", "Bearer tok-2", "Bearer tok-3") \
                 or r.headers.get("Authorization") in self.revoked:
             return web.Response(status=401)
@@ -178,7 +178,7 @@ async def main():
         assert events["auth"][0] == ("Bearer tok-1", "1"), events["auth"]
         h = events["hello"]
         assert h["protocol"] == 1 and h["node_name"] == "test-node" and h["max_streams"] == 8, h
-        assert h["capabilities"]["voice_core_version"] == "v9.9.9" and h["voice_core_version"] == "v9.9.9"
+        assert h["capabilities"]["voxarbor_node_version"] == "v9.9.9" and h["voxarbor_node_version"] == "v9.9.9"
         print("enroll + hello ok")
 
         await co.req(1, "POST", "/tts/v1/echo", body='{"a": 1}')

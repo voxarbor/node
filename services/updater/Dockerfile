@@ -18,13 +18,13 @@ RUN apt-get update && apt-get install -y --no-install-recommends curl ca-certifi
     && curl -fsSL --retry 10 --retry-all-errors -o /usr/local/bin/cosign https://github.com/sigstore/cosign/releases/download/${COSIGN_VERSION}/cosign-linux-amd64 \
     && echo "${COSIGN_SHA256}  /usr/local/bin/cosign" | sha256sum -c \
     && chmod +x /usr/local/lib/docker/cli-plugins/docker-compose /usr/local/bin/cosign
-ARG VOICE_CORE_RELEASE=dev
-ENV UPDATER_RELEASE=${VOICE_CORE_RELEASE} HOME=/tmp PYTHONUNBUFFERED=1
+ARG VOXARBOR_NODE_RELEASE=dev
+ENV UPDATER_RELEASE=${VOXARBOR_NODE_RELEASE} HOME=/tmp PYTHONUNBUFFERED=1
 WORKDIR /app
 # Sigstore's trusted root, fetched through TUF at build time (fresh with every updater release, the ARG above busts the
 # cache): signatures are then verified offline, a node does not depend on reaching the TUF mirror (live TUF stays the
 # fallback when this root is too old for a newer certificate)
-RUN echo "release ${VOICE_CORE_RELEASE}" && HOME=/tmp/b cosign initialize >/dev/null \
+RUN echo "release ${VOXARBOR_NODE_RELEASE}" && HOME=/tmp/b cosign initialize >/dev/null \
     && cp /tmp/b/.sigstore/root/tuf-repo-cdn.sigstore.dev/targets/trusted_root.json /app/trusted_root.json \
     && rm -rf /tmp/b
 COPY updater.py VERSION ./

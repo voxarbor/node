@@ -44,8 +44,7 @@ https://github.com/voxarbor/node/.github/workflows/release.yml@refs/tags/<тег
 | `--uninstall [--yes]` | зупинити й повністю видалити вузол: контейнери, томи з моделями, образи вузла й теку |
 | `--help` | довідка |
 
-Змінні середовища: `GATEWAY_PORT` (8790), `NODE_DIR` (тека вузла, типово `~/voxarbor-node`; наявне встановлення в
-`~/voice-core-node` скрипт знаходить сам і не переносить), `NODE_RELEASE` (конкретний реліз `vX.Y.Z`, типово
+Змінні середовища: `GATEWAY_PORT` (8790), `NODE_DIR` (тека вузла, типово `~/voxarbor-node`), `NODE_RELEASE` (конкретний реліз `vX.Y.Z`, типово
 найновіший).
 
 ### Що робить скрипт, крок за кроком

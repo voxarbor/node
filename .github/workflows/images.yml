@@ -93,7 +93,7 @@ jobs:
           secrets: |
             hf_token=${{ secrets.HF_TOKEN }}
           build-args: |
-            VOICE_CORE_RELEASE=${{ steps.v.outputs.release }}
+            VOXARBOR_NODE_RELEASE=${{ steps.v.outputs.release }}
             ${{ matrix.args }}
           labels: |
             org.opencontainers.image.source=https://github.com/voxarbor/node

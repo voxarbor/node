@@ -12,7 +12,7 @@ labels: bug
 2. …
 
 **Вузол**
-- Версія (`VOICE_CORE_TAG` або `product_version` з `/capabilities`):
+- Версія (`VOXARBOR_NODE_TAG` або `product_version` з `/capabilities`):
 - Процесор / відеокарта, ОС:
 - Режим (`node.mode`), чи підключено до координатора:
 
