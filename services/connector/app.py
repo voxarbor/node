@@ -382,6 +382,8 @@ class Link:
         method, path = str(f.get("method", "")).upper(), str(f.get("path", ""))
         if len(self.streams) > self.max_streams:
             return self.fail(s, "too_many_streams", f"more than {self.max_streams} streams")
+        if (updater_brief() or {}).get("state") == "draining":  # the node is about to update: send it elsewhere
+            return self.fail(s, "draining", "the node is finishing its tasks before an update")
         if method not in METHODS or ".." in path or not (path.startswith(PATHS) or path.split("?")[0] == "/capabilities"):
             return self.fail(s, "forbidden_path", f"{method} {path[:80]} is not forwarded")
         if f.get("body") == "inline" and len(str(f.get("inline", "")).encode()) > INLINE_MAX:

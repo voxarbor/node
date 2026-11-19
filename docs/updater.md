@@ -103,6 +103,17 @@ paths (`./Caddyfile`) resolve the same way. Works on Linux, WSL and Docker Deskt
 
 The updater also removes `NODE_JOIN_CODE` from `.env` once the connector is enrolled and connected.
 
+## Draining before an update (since 0.16.5)
+
+Once the update's images are local, the updater does not wait for a quiet moment any more: it sets
+`state: "draining"` (in `/capabilities.updater` with `draining_since` and `drain_timeout_s`, and in every node ping as
+`updater: {state, seq}` with the same `seq`). The coordinator then gives the node no new tasks; the connector
+refuses a new request with the `res_error` code `draining` (re-send it elsewhere, no penalty). Running work — coordinator
+streams and TTS jobs — finishes; diarization sessions are not waited for (the coordinator moves them). When nothing
+runs, or after `drain_timeout_s` (`UPDATER_DRAIN_S`, 600 s), the update is applied (~1 min) and the state goes back to
+`idle`. Pause and a withdrawn wish end the draining. Updating the nodes one by one is the coordinator's part: the next
+node gets its `update.version` once the previous one reports `idle`, `last_update.ok` for that version and is healthy.
+
 ## Opus-MT models version (since 0.14.1)
 
 The signed manifest's `opus_models_tag` decides the translation models version. On every update the updater removes a

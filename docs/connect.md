@@ -121,7 +121,7 @@ the receiver sends `window` frames as it consumes data. Body bytes sent past the
 
 ### Errors
 
-`res_error.code`: `forbidden_path` (403), `bad_request` (malformed frame, 400), `too_many_streams` (429),
+`res_error.code`: `forbidden_path` (403), `bad_request` (malformed frame, 400), `too_many_streams` (429), `draining` (503, since 0.16.5: the node is about to update — send the task to another node, no penalty),
 `upstream_unreachable` (502: local gateway or service down), `upstream_timeout` (504), `deadline` (the request's
 `deadline_ms` passed), `idle_timeout`, `cancelled`, `protocol_error`. HTTP errors of the services themselves (401 from a service, 422, 429 busy, …) are normal `res`
 frames with that status.

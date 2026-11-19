@@ -24,6 +24,7 @@ CTL = os.environ.get("UPDATER_CTL", "/ctl")
 ENV_MODE = os.environ.get("UPDATER_MODE", "auto").strip().lower()
 HEALTH_MIN = float(os.environ.get("UPDATER_HEALTH_MIN", "10"))
 WINDOW_S = float(os.environ.get("UPDATER_WINDOW_S", "120"))
+DRAIN_S = float(os.environ.get("UPDATER_DRAIN_S", "600"))  # longest wait for running tasks before an update
 ALLOW_DOWNGRADE = os.environ.get("UPDATER_ALLOW_DOWNGRADE", "") == "1"
 GENTLE = os.environ.get("NODE_MODE", "") == "gentle"
 TOKEN = os.environ.get("API_KEY", "")
@@ -171,7 +172,7 @@ class Status:
         self.save()
 
     def set(self, **kw):
-        public = ("mode", "state", "desired", "available", "error", "last_update", "warnings")
+        public = ("mode", "state", "desired", "available", "error", "last_update", "warnings", "draining_since")
         if any(self.d.get(k) != v for k, v in kw.items() if k in public):
             self.d["seq"] += 1
         self.d.update(kw)
@@ -305,6 +306,7 @@ class Updater:
         self.prepared = {}  # tag -> manifest (verified, files in cache/<tag>)
         self.pulled = set()  # tags whose images are local
         self.idle_since = None
+        self.drain_since = None
         self._repaired = None  # release whose opus models were checked (repair)
         self._repair_at = 0.0
 
@@ -519,6 +521,8 @@ class Updater:
         cur = self.p.tag()
         self.st.set(mode=mode, desired=tag)
         if d.get("paused"):
+            if self.drain_since is not None:
+                self.drain_end()
             self.st.set(state="paused")
             self.idle_since = None
             return
@@ -527,6 +531,8 @@ class Updater:
             self.st.set(warnings=[f"VOXARBOR_NODE_TAG={cur} in .env is not a release version: "
                                   + ("updating to the coordinator's " + tag if ver(tag) else "waiting for the coordinator's version")])
         if not ver(tag) or tag == cur:
+            if self.drain_since is not None:  # the wish went away while draining
+                self.drain_end()
             self.st.set(state="idle", available=None)
             self.repair(cur)
             return
@@ -560,10 +566,20 @@ class Updater:
                 self.st.set(state="waiting_window")
                 return
             self.pulled.add(tag)
-        if not in_window:
-            self.st.set(state="waiting_window")
+        # drain: ask the coordinator for no new tasks (state "draining" in /capabilities and every ping, the connector
+        # refuses new requests), let the running ones finish, then update; after DRAIN_S the update goes anyway
+        if self.drain_since is None:
+            self.drain_since = time.time()
+            self.st.set(state="draining", draining_since=now_iso(), drain_timeout_s=int(DRAIN_S))
+            log(f"draining before the update to {tag} (up to {DRAIN_S:.0f} s)")
+        if not quiet and time.time() - self.drain_since < DRAIN_S:
             return
+        self.drain_end()
         self.apply(tag, man)
+
+    def drain_end(self):
+        self.drain_since = None
+        self.st.set(draining_since=None, drain_timeout_s=None)
 
     def join_code_cleanup(self):
         """the one-time join code has no use after the connector enrolled: it leaves .env"""
