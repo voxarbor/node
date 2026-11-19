@@ -1,14 +1,16 @@
 """Old vs new Opus-MT (CTranslate2 int8, exactly as the node's translate service runs it: >>ukr<< prefix, beam 2,
-repetition_penalty 1.1) on our test sets + a general set (Tatoeba eng-ukr test, CC-BY 2.0, to catch forgetting).
+repetition_penalty 1.1) on our test sets + general sets to catch forgetting
+(Tatoeba eng-ukr test, NTREX-128, WMT22 en-uk).
   python eval.py <prep dir> <old ct2 dir> <new ct2 dir> <out dir>
 Writes BLEU/chrF per set, placeholder keep rate (must be 100 %), and blind judge files (judge/*.md + key.json)."""
-import json, os, random, re, sys
+import json, os, random, re, subprocess, sys, urllib.request
 
 import ctranslate2, sacrebleu, sentencepiece as spm
 
 P, OLD, NEW, OUT = sys.argv[1:5]
 os.makedirs(os.path.join(OUT, "judge"), exist_ok=True)
 PH = re.compile(r"\bN\d+\b")
+GH = "https://raw.githubusercontent.com"
 
 
 def tsv(name):
@@ -16,12 +18,39 @@ def tsv(name):
     return [l.rstrip("\n").split("\t")[:2] for l in open(p, encoding="utf-8")] if os.path.exists(p) else []
 
 
+def fetch(url, path):
+    if not os.path.exists(path):
+        urllib.request.urlretrieve(url, path + ".part")
+        os.replace(path + ".part", path)
+    return [l.rstrip("\n") for l in open(path, encoding="utf-8")]
+
+
 def general():
-    from datasets import load_dataset
-    ds = load_dataset("Helsinki-NLP/tatoeba_mt", "eng-ukr", split="test", trust_remote_code=True)
-    rows = [(r["sourceString"], r["targetString"]) for r in ds]
-    random.Random(1).shuffle(rows)
-    return rows[:1000]
+    """general (non-game) sets to catch forgetting; each is optional (no network -> skipped, reported)"""
+    G = os.environ.get("GENERAL_DIR", os.path.join(OUT, "general"))
+    os.makedirs(G, exist_ok=True)
+    out = {}
+    try:  # Tatoeba-Challenge test eng-ukr (CC-BY 2.0), from GitHub: the HF copy is gated
+        rows = [l.split("\t")[2:4] for l in fetch(f"{GH}/Helsinki-NLP/Tatoeba-Challenge/master/data/test/eng-ukr/test.txt",
+                                                    os.path.join(G, "tatoeba.txt"))]
+        rows = [r for r in rows if len(r) == 2 and r[0] and r[1]]
+        random.Random(1).shuffle(rows)
+        out["general_tatoeba"] = rows[:1000]
+    except Exception as exc:  # noqa: BLE001
+        print("general_tatoeba unavailable:", exc)
+    try:  # NTREX-128 (CC-BY-SA 4.0): 1997 news sentences, long formal text
+        b = f"{GH}/MicrosoftTranslator/NTREX/main/NTREX-128/newstest2019"
+        out["general_ntrex"] = list(zip(fetch(f"{b}-src.eng.txt", os.path.join(G, "ntrex.en")),
+                                        fetch(f"{b}-ref.ukr.txt", os.path.join(G, "ntrex.uk"))))
+    except Exception as exc:  # noqa: BLE001
+        print("general_ntrex unavailable:", exc)
+    try:  # WMT22 general en-uk through sacrebleu's own download
+        echo = lambda side: subprocess.run(["sacrebleu", "-t", "wmt22", "-l", "en-uk", "--echo", side], check=True,
+                                           capture_output=True, text=True, env={**os.environ, "SACREBLEU": G}).stdout.splitlines()
+        out["general_wmt22"] = list(zip(echo("src"), echo("ref")))
+    except Exception as exc:  # noqa: BLE001
+        print("general_wmt22 unavailable:", exc)
+    return {k: v for k, v in out.items() if v}
 
 
 def translator(path):
@@ -36,12 +65,9 @@ def translator(path):
     return run
 
 
-sets = {n: tsv(f"{n}.tsv") for n in ("test", "test_random250", "test_ph", "dev_ph", "gold")}
-try:
-    sets["general_tatoeba"] = general()
-except Exception as exc:  # noqa: BLE001
-    print("general set unavailable:", exc)
-sets = {k: v for k, v in sets.items() if v}
+sets = {n: tsv(f"{n}.tsv") for n in ("test", "test_random250", "test_auto", "test_ph", "dev_ph", "gold")}
+sets.update(general())
+sets ={k: v for k, v in sets.items() if v}
 old, new = translator(OLD), translator(NEW)
 report, judge = {}, []
 for name, rows in sets.items():

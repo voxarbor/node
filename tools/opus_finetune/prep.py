@@ -17,7 +17,7 @@ os.makedirs(OUT, exist_ok=True)
 
 
 def read(name):
-    p = os.path.join(D, name)
+    p = name if os.path.isabs(name) else os.path.join(D, name)
     if not os.path.exists(p):
         return []
     with open(p, encoding="utf-8") as f:
@@ -71,15 +71,19 @@ def write(name, rows):
 
 
 train = read("train.tsv")
+if os.environ.get("AUTO") == "1":  # pairs from YouTube auto-captions (English cleaned by a model): noisier, optional
+    train += read("train_auto.tsv")
 ph = [p for p in (placeholder(en, uk) for en, uk in train) if p]
 aug = train + ph * 2  # placeholder pairs twice: a small, important behaviour
 # general-language replay (optional replay.tsv: general English sentences translated by the CURRENT model itself):
 # keeps the old behaviour on long formal text while the model learns our domain (v1 without it lost 2-3 chrF there)
-replay = read("replay.tsv")
+replay = read("replay.tsv") or read(os.environ.get("REPLAY", "/nonexistent"))
+if os.environ.get("REPLAY_RATIO"):  # e.g. 1 = as many replay pairs as our own pairs
+    replay = replay[:int(len(train) * float(os.environ["REPLAY_RATIO"]))]
 aug += replay
 random.shuffle(aug)
 write("train_aug.tsv", aug)
-for name in ("dev", "test", "test_random250", "gold"):
+for name in ("dev", "test", "test_random250", "test_auto", "gold"):
     rows = read(f"{name}.tsv")
     write(f"{name}.tsv", rows)
     if name in ("dev", "test"):
