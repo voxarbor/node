@@ -28,7 +28,7 @@ Text-to-speech
 Translation and punctuation
 - Opus-MT tc-big models, Helsinki-NLP / University of Helsinki (Tiedemann et al.), converted to CTranslate2 -
   CC-BY-4.0
-  Since node-models-opus:3 (node 0.16.2) the en-zle model is the third fine-tune: 11 356 of our phrases translated by
+  Since node-models-opus:3 (node 0.16.4) the en-zle model is the third fine-tune: 11 356 of our phrases translated by
   Claude plus the same number of general WikiText-103 sentences (15-60 words) translated by the previous model, lr 1e-5,
   from Helsinki-NLP/opus-mt-tc-big-en-zle (still CC-BY-4.0, modified). node-models-opus:2 (node 0.14.0): the en-zle model (Helsinki-NLP/opus-mt-tc-big-en-zle) is MODIFIED: fine-tuned
   by the VoxArbor project on ~5k English phrases from our videos translated into Ukrainian by Claude (Anthropic), plus
