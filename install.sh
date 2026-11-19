@@ -32,6 +32,8 @@ usage() {
                         Переклад працює завжди. fetch — завантаження з YouTube з IP цього ПК.
   --gpu auto|off        auto: відеокарта NVIDIA, якщо Docker її бачить (типово); off: лише процесор
   --mode normal|gentle  gentle — економний режим: одна задача за раз, половина потоків
+  --light               легкий вузол: лише переклад і пунктуація (без tts, stt, diarize, fetch), до 4 потоків
+                        і 4 ГБ пам'яті. Такий вузол координатор приймає лише від адміністратора
   --dry-run             лише перевірити параметри, нічого не змінюючи
   --uninstall [--yes]   повністю видалити вузол: контейнери, томи з моделями, образи, теку ~/voxarbor-node
   --help                ця довідка
@@ -41,7 +43,7 @@ HELP
 }
 
 # ---------- 1. parameters ----------
-JOIN=""; NAME=""; WANT="tts,stt,diarize"; GPU_MODE="auto"; MODE="normal"; DRY=""; UNINSTALL=""; YES=""
+JOIN=""; NAME=""; WANT="tts,stt,diarize"; GPU_MODE="auto"; MODE="normal"; DRY=""; UNINSTALL=""; YES=""; LIGHT=""
 while [ $# -gt 0 ]; do
   case "$1" in
     --join) [ $# -ge 2 ] || die "--join: потрібен код"; JOIN="$2"; shift ;;
@@ -57,6 +59,7 @@ while [ $# -gt 0 ]; do
     --mode) [ $# -ge 2 ] || die "--mode: normal або gentle"; MODE="$2"; shift ;;
     --mode=*) MODE="${1#--mode=}" ;;
     --dry-run) DRY=1 ;;
+    --light) LIGHT=1 ;;
     --uninstall) UNINSTALL=1 ;;
     --yes|-y) YES=1 ;;
     -h|--help) usage; exit 0 ;;
@@ -89,6 +92,9 @@ if [ -n "$UNINSTALL" ]; then
   exit 0
 fi
 
+# --light: translation only (e.g. next to the coordinator on a server); the coordinator decides at enroll whether a
+# node like that is allowed (only nodes the admin added), the node just reports its services honestly
+[ -z "$LIGHT" ] || { WANT=""; GPU_MODE=off; }
 SERVICES="translate"; OFF=""; FETCH=""; HEAVY=0
 for s in $(echo "$WANT" | tr ',' ' '); do
   case "$s" in
@@ -101,7 +107,7 @@ for s in tts stt diarize; do
   case ",$WANT," in *",$s,"*) SERVICES="$SERVICES,$s"; HEAVY=$((HEAVY + 1)) ;; *) OFF="$OFF $s" ;; esac
 done
 case ",$WANT," in *",fetch,"*) FETCH=1; SERVICES="$SERVICES,fetch" ;; esac
-[ "$HEAVY" -gt 0 ] || die "потрібен хоча б один із tts, stt, diarize: вузол лише з перекладом координатору не потрібен"
+[ "$HEAVY" -gt 0 ] || [ -n "$LIGHT" ] || die "потрібен хоча б один із tts, stt, diarize: вузол лише з перекладом координатору не потрібен"
 case "$GPU_MODE" in auto|off) ;; *) die "--gpu: auto або off" ;; esac
 case "$MODE" in normal|gentle) ;; *) die "--mode: normal або gentle" ;; esac
 COORD="${COORD%/}"
@@ -181,6 +187,10 @@ setenv COORDINATOR_URL "$COORD";         setenv NODE_JOIN_CODE "$JOIN";         
 setenv VOXARBOR_NODE_TAG "$TAG";         setenv NODE_SERVICES "$SERVICES"
 setenv STT_THREADS "$half";  setenv TTS_THREADS "$quarter";  setenv TRANSLATE_THREADS "$quarter";  setenv DIARIZE_THREADS "$quarter"
 for s in STT TTS TRANSLATE DIARIZE; do setenv "${s}_CPUS" "$N"; done
+if [ -n "$LIGHT" ]; then   # a light node shares its machine: translation gets at most 4 threads / 4 cores / 4 GB
+  t=4; [ "$N" -ge 4 ] || t=$N
+  setenv TRANSLATE_THREADS "$t"; setenv TRANSLATE_CPUS "$t"; setenv TRANSLATE_MEM 4g
+fi
 setenv COMPOSE_PROFILES "${FETCH:+fetch}"
 setenv NODE_MODE "$([ "$MODE" = normal ] || echo "$MODE")"
 OFF_ALL=""; for s in $OFF; do OFF_ALL="$OFF_ALL $s"; [ "$s" != stt ] || OFF_ALL="$OFF_ALL init-stt"; done

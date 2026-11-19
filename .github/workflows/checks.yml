@@ -19,6 +19,7 @@ jobs:
           sh install.sh --help | grep -q -- "--coordinator"
           sh install.sh --dry-run --coordinator https://example.invalid --join test_1 --services stt,fetch --gpu off --mode gentle
           ! sh install.sh --dry-run --coordinator https://e.invalid --join x --services fetch       # no heavy service
+          sh install.sh --dry-run --light --coordinator https://e.invalid --join x                  # translation-only node
           ! sh install.sh --dry-run --coordinator https://e.invalid --join x --services translate   # translate is always on
           ! sh install.sh --dry-run --join x                                         # no coordinator
           ! sh install.sh --dry-run --coordinator https://e.invalid --join x --services foo
