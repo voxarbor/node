@@ -115,6 +115,9 @@ LETTERS = {"a": "ей", "b": "бі", "c": "сі", "d": "ді", "e": "і", "f": "
 CAMEL = re.compile(r"[A-Z]{2,}(?=[A-Z][a-z]|$)|[A-Z]?[a-z]+|[A-Z]+|\d+")
 
 
+EN_DIGIT = dict(zip("0123456789", ("зі+ро", "ва+н", "ту+", "срі+", "фо+р", "фа+йв", "сі+кс", "се+вен", "е+йт", "на+йн")))
+
+
 def name(word: str, lang: str = "en-us") -> str | None:
     """One Latin token (a name, CamelCase, acronym, owner/repo-name) -> its Ukrainian spelling with stress."""
     if not re.search(r"[A-Za-z]", word):
@@ -130,6 +133,9 @@ def name(word: str, lang: str = "en-us") -> str | None:
                 out.append("-".join(LETTERS.get(c, c) for c in b.lower()))
             else:
                 out.append(ukr(b, lang) or b)
+    # a single digit between letters of one token is said in English: P2P "пі ту пі", B2B (else "пі другому пі")
+    out = [EN_DIGIT[b] if len(b) == 1 and b.isdigit() and 0 < i < len(out) - 1 and not out[i - 1].isdigit()
+           and not out[i + 1].isdigit() else b for i, b in enumerate(out)]
     return re.sub(r"-(?=\d)|(?<=\d)-", " ", "-".join(out))  # "ар 1": a hyphen glued the number to the letters
 
 

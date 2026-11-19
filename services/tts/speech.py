@@ -130,18 +130,29 @@ def english(text: str, lang: str = "en-us", cache: dict | None = None,
 
     text = _SIZE.sub(r"\1 на \2", text)  # 3x3, 1920×1080
     text = _DECADE.sub(r"\1-ті", text)  # 90s -> 90-ті (the worker reads it "дев'яності")
+    text = _RES_K.sub(r"\1 кей", _RES_P.sub(r"\1 пі", text))  # 1080p, 4K: a unit after the number
     return _LATIN.sub(sub, text), used
 
 
 _SIZE = re.compile(r"(?<!\w)(\d+) ?[xх×] ?(\d+)(?!\w)")
 _DECADE = re.compile(r"(?<!\w)(\d*0)['’]?s(?!\w)")
+_RES_P = re.compile(r"(?<!\w)(\d{3,4})[pр](?!\w)")  # 1080p, 720p
+_RES_K = re.compile(r"(?<!\w)([248])[Kk](?!\w)")  # 4K, 8K
 
 
 def _numeral_here(text: str, m: re.Match) -> bool:
-    """I, V, X, IV are numerals only after a capitalised word or a name (Петро I, Rocky IV, iPhone X) or before
-    "століття"; after a common word they are letters (базу I, покемона IV -> ай-ві)."""
+    """I, V, X, IV are numerals only after a name (Петро I, Rocky IV, iPhone X) or before "столітт…"; after a common
+    word they are letters (базу I, покемона IV -> ай-ві). A Cyrillic word counts as a name only when it is capitalised
+    inside a sentence: at the start of a sentence every word is capitalised ("Базу I.", "Мої IV хороші.")."""
     prev = re.search(r"(\S+)\s+$", text[:m.start()])
-    return bool(prev and re.search(r"[A-ZА-ЯІЇЄҐ]", prev.group(1)) or re.match(r"\s+ст", text[m.end():]))
+    if re.match(r"\s+ст", text[m.end():]):
+        return True
+    if not prev or not re.search(r"[A-ZА-ЯІЇЄҐ]", prev.group(1)):
+        return False
+    if re.search(r"[A-Za-z]", prev.group(1)):
+        return True
+    before = text[:prev.start(1)].rstrip()
+    return bool(before) and not before.endswith((".", "!", "?", "…", ":"))  # rstrip() already dropped newlines
 
 
 # Explicit pause markup "{пауза 0.8}" (also "{pause 0.8}", "0,8", "0.8 с"): 0.1-5 s of silence at that point. Right

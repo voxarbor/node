@@ -183,12 +183,19 @@ print("lexicon off ok")
 # 0.16.2 audit fixes (model-free part; tests/test_verbalize.py checks the verbalizer)
 for w in ("World", "Earth", "Girl", "Person"):  # a lone ɜ (British-style) is a vowel too, not dropped
     assert any(c in phonemize.VOWELS for c in phonemize.name(w)), (w, phonemize.name(w))
-assert phonemize.name("R1") == "ар 1" and phonemize.name("P2P") == "пі 2 пі", (phonemize.name("R1"), phonemize.name("P2P"))
+assert phonemize.name("R1") == "ар 1" and phonemize.name("P2P") == "пі-ту+-пі", (phonemize.name("R1"), phonemize.name("P2P"))
 out, _ = speech.english("Кубик 3x3, екран 1920×1080, музика 20s і 90's, модель R1.")
 assert "3 на 3" in out and "1920 на 1080" in out and "20-ті" in out and "90-ті" in out and "ар 1" in out, out
 out, names = speech.english("Мої IV у покемона, на базу I, Rocky IV, Dungeons II, Петро I, iPhone X, у X столітті, I think.")
 assert "Rocky" in names and "ро+кі IV" in out and "II" in out and "Петро I" in out and "у X столітті" in out, out
-assert "Мої IV" in out  # capitalised word before it: a name, the numeral stays (rule from the audit)
+assert "Мої ай-ві" in out  # a capital at the start of a sentence is not a name (re-check of the audit)
+for src, want in (("Базу I.", "Базу ай."), ("Покемона IV.", "Покемона ай-ві."), ("Мої IV хороші.", "Мої ай-ві хороші."),
+                  ("Прийшов Петро I.", "Прийшов Петро I."), ("Rocky IV.", None)):
+    got, _ = speech.english(src)
+    assert got == want if want else "IV" in got, (src, got)
+got, _ = speech.english("Екран 1080p і відео 720p, монітор 4K.")
+assert "1080 пі" in got and "720 пі" in got and "4 кей" in got, got
+print("audit re-check ok:", got)
 assert "базу ай" in out and "IV у" not in out.replace("Мої IV у", ""), out
 out, _ = speech.english("у покемона IV та EV.")
 assert out == "у покемона ай-ві та і-ві.", out
