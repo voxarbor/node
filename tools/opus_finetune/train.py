@@ -42,7 +42,9 @@ args = Seq2SeqTrainingArguments(
 trainer = Seq2SeqTrainer(model=model, args=args, train_dataset=train, eval_dataset=dev, processing_class=tok,
                          data_collator=DataCollatorForSeq2Seq(tok, model=model),
                          callbacks=[EarlyStoppingCallback(early_stopping_patience=2)])
-trainer.train()
+# resume after a crash (on WSL the GPU sometimes fails with "CUDA error: unknown error"; run.sh retries)
+last = sorted((d for d in os.listdir(OUT) if d.startswith("checkpoint-")), key=lambda d: int(d.split("-")[1])) if os.path.isdir(OUT) else []
+trainer.train(resume_from_checkpoint=os.path.join(OUT, last[-1]) if last else None)
 best = os.path.join(OUT, "best")
 trainer.save_model(best)
 tok.save_pretrained(best)

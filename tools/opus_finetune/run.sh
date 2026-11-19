@@ -20,7 +20,9 @@ if [ -n "${OLD_CT2:-}" ]; then rm -rf "$WORK/ct2-old"; cp -r "$OLD_CT2" "$WORK/c
 if [ -n "${REPLAY_N:-}" ] && [ ! -s "$DATA/replay.tsv" ] && [ ! -s "$WORK/replay.tsv" ]; then
   run "python /kit/replay.py /work/ct2-old /work/replay.tsv $REPLAY_N"; fi
 run "python /kit/prep.py /data /work/prep"
-run "python /kit/train.py /work/prep /work/model 2>&1 | tee /work/train.log | grep -E 'eval_loss|best checkpoint|Error' "
+for try in 1 2 3; do  # a crashed run resumes from its last checkpoint
+  run "python /kit/train.py /work/prep /work/model 2>&1 | tee -a /work/train.log | grep -E 'eval_loss|best checkpoint|Error' "
+  [ -s "$WORK/model/best/config.json" ] && break; echo "training stopped (try $try), resuming"; done
 run "ct2-transformers-converter --model /work/model/best --quantization int8 --output_dir /work/ct2-new --copy_files source.spm target.spm --force"
 run "python /kit/eval.py /work/prep /work/ct2-old /work/ct2-new /work/eval"
 echo "done: $WORK/eval/report.json, blind judge files in $WORK/eval/judge, new model in $WORK/ct2-new"

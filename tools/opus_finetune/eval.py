@@ -81,7 +81,7 @@ for name, rows in sets.items():
             ok = sum(sorted(PH.findall(h)) == sorted(PH.findall(s)) for h, s in zip(hyp, src))
             rep[tag]["placeholders_kept"] = f"{ok}/{len(rows)}"
     report[name] = rep
-    if name in ("test", "test_random250", "test_ph"):
+    if name in ("test", "test_random250", "test_auto", "test_ph"):
         judge += [(name, s, a, b) for s, a, b in zip(src, o, n)]
     with open(os.path.join(OUT, f"{name}.jsonl"), "w", encoding="utf-8") as f:
         for s, r_, a, b in zip(src, ref, o, n):
