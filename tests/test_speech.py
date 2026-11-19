@@ -179,3 +179,26 @@ assert "Збро+йні" not in off and "гі+тхаб" not in off, off
 segs, _ = speech.plan("ЗСУ і GitHub.", use_lexicon=False)
 assert "Збро+йні" not in segs[0]["spoken"], segs
 print("lexicon off ok")
+
+# 0.16.2 audit fixes (model-free part; tests/test_verbalize.py checks the verbalizer)
+for w in ("World", "Earth", "Girl", "Person"):  # a lone ɜ (British-style) is a vowel too, not dropped
+    assert any(c in phonemize.VOWELS for c in phonemize.name(w)), (w, phonemize.name(w))
+assert phonemize.name("R1") == "ар 1" and phonemize.name("P2P") == "пі 2 пі", (phonemize.name("R1"), phonemize.name("P2P"))
+out, _ = speech.english("Кубик 3x3, екран 1920×1080, музика 20s і 90's, модель R1.")
+assert "3 на 3" in out and "1920 на 1080" in out and "20-ті" in out and "90-ті" in out and "ар 1" in out, out
+out, names = speech.english("Мої IV у покемона, на базу I, Rocky IV, Dungeons II, Петро I, iPhone X, у X столітті, I think.")
+assert "Rocky" in names and "ро+кі IV" in out and "II" in out and "Петро I" in out and "у X столітті" in out, out
+assert "Мої IV" in out  # capitalised word before it: a name, the numeral stays (rule from the audit)
+assert "базу ай" in out and "IV у" not in out.replace("Мої IV у", ""), out
+out, _ = speech.english("у покемона IV та EV.")
+assert out == "у покемона ай-ві та і-ві.", out
+print("audit fixes ok:", out)
+
+# stress never sits on й or another non-vowel (accentuk put "й́ти")
+real = worker._accent_uk
+worker._accent_uk = lambda t: f"Тре{A}ба й{A}ти додо{A}му."
+try:
+    assert worker.stress("Треба йти додому.") == f"Тре{A}ба йти додо{A}му.", worker.stress("Треба йти додому.")
+finally:
+    worker._accent_uk = real
+print("stress on vowels only ok")

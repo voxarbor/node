@@ -218,10 +218,13 @@ def _keep_user_stress(src: str, out: str) -> str:
     return _WORD.sub(lambda m: marked.get(bare(m.group(0)), m.group(0)), out)
 
 
+_NOT_ON_VOWEL = re.compile(f"(?<![аеєиіїоуюяАЕЄИІЇОУЮЯ]){ACUTE}")  # accentuk sometimes stresses й ("й́ти")
+
+
 def stress(t: str) -> str:
     """Put U+0301 after the stressed vowel of every word; user marks ("+" already turned into U+0301) win."""
     if STRESS == "accentuk":
-        out = _keep_user_stress(t, _accent_uk(t.replace(ACUTE, "").replace(LONG, "")))
+        out = _NOT_ON_VOWEL.sub("", _keep_user_stress(t, _accent_uk(t.replace(ACUTE, "").replace(LONG, ""))))
         # words the lexicon/models left unmarked: the word-stress fork's neural accentor guesses them
         def guess(m):
             w = m.group(0)
@@ -229,7 +232,7 @@ def stress(t: str) -> str:
                 return w
             return _stress()(w)
         return _WORD.sub(guess, out)
-    return _stress()(t)
+    return _NOT_ON_VOWEL.sub("", _stress()(t))
 
 
 def _model(name: str):
@@ -298,9 +301,19 @@ def _verbalize_accentuk(part: str) -> str:
     return _frontend.prepare(part).text.replace(ACUTE, "")  # stress is placed later, with user marks
 
 
+_PLUS = re.compile(r"(?<=\d) ?\+ ?(?=\d)|(?<!\S)\+(?!\S)")  # "13 + 14", "13+14": a sum, not a stress mark
+_NUMBER = r"\d+(?:[  ]\d{3})*"
+_SPOKEN = re.compile(_NUMBER + r"(?:[.,:]\d+)*(?:-[\w'ʼ’]+)?|[\w'ʼ’]+(?:-[\w'ʼ’]+)*")  # "1 000", "20-х": one each
+
+
+def _plus(t: str) -> str:
+    return _PLUS.sub(" плюс ", t).replace("  ", " ")
+
+
 def verbalize(text: str) -> str:
+    verb = _verbalize_m2m100 if VERBALIZER == "m2m100" else _verbalize_accentuk
     out = []
-    for part in split_to_parts(text, group=False):
+    for part in split_to_parts(_plus(text), group=False):
         part = part.strip()
         if not part:
             continue
@@ -311,7 +324,15 @@ def verbalize(text: str) -> str:
             continue
         stressed = {w.replace("+", ""): w for w in re.findall(r"[\w'ʼ’+]*\+[\w'ʼ’+]*", part)}
         bare = part.replace("+", "")
-        done = _verbalize_m2m100(bare) if VERBALIZER == "m2m100" else _verbalize_accentuk(bare)
+        # "90-ті" (speech.english: 90s): the verbalizer only knows "90-х", read "дев'яностих" -> "дев'яності"
+        bare = re.sub(r"(?<!\w)(\d+)-ті(?!\w)", lambda m: re.sub(r"их$", "і", verb(f"{m.group(1)}-х").strip(" .")), bare)
+        done = verb(bare)
+        if len(_SPOKEN.findall(done)) < len(_SPOKEN.findall(bare)):
+            # a number swallowed or glued to the next word ("ар 1" -> "ар", "11 ер" -> "одинадцятогоер"):
+            # read every number as a plain cardinal instead
+            print(f"verbalizer lost a word, numbers as cardinals: {done[:80]!r}", flush=True)
+            bare = re.sub(_NUMBER, lambda m: verb(m.group(0)).strip(" ."), bare)
+            done = verb(bare)
         if re.search(r"\d", done) and VERBALIZER != "m2m100":
             # digits left over are not spoken at all (IPA drops them): a missing/failed span model must not
             # silence numbers, so fall back to the seq2seq verbalizer for this sentence
@@ -327,6 +348,7 @@ def _prepare(t: str, use_lexicon: bool = True) -> str:
     from ukrainian_word_stress import StressSymbol
 
     t = t.strip().replace('"', "")
+    t = _plus(t)  # without the verbalizer too: "+" between numbers is not a stress mark
     t = lexicon.apply(t) if use_lexicon else t  # user stress lexicon (whole words, phrases, regex contexts) before automatic stress
     # "++" = stress plus the IPA length mark, which ipa_uk passes through and both engines' vocabularies know:
     # HolosTTS barely lengthens some stressed vowels in running speech (за́мок sounded like замок).

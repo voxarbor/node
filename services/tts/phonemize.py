@@ -15,7 +15,7 @@ import subprocess
 # longest first; IPA as espeak-ng prints it for en-us (length marks and secondary stress dropped beforehand)
 SOUNDS = [
     ("tʃ", "ч"), ("dʒ", "дж"), ("aɪɚ", "аєр"), ("aɪ", "ай"), ("aʊ", "ау"), ("ɔɪ", "ой"), ("eɪ", "ей"), ("oʊ", "о"),
-    ("ɪɹ", "ір"), ("ɛɹ", "ер"), ("ʊɹ", "ур"), ("ɑɹ", "ар"), ("ɔɹ", "ор"), ("ɜɹ", "ер"), ("ɚ", "ер"), ("ɝ", "ер"),
+    ("ɪɹ", "ір"), ("ɛɹ", "ер"), ("ʊɹ", "ур"), ("ɑɹ", "ар"), ("ɔɹ", "ор"), ("ɜɹ", "ер"), ("ɚ", "ер"), ("ɝ", "ер"), ("ɜ", "ер"),
     ("iəɹ", "ір"), ("iə", "іа"), ("i", "і"), ("ɪ", "і"), ("ᵻ", "і"), ("e", "е"), ("ɛ", "е"), ("æ", "е"), ("ɑ", "а"), ("ɒ", "о"),
     ("ɔ", "о"), ("o", "о"), ("ʊ", "у"), ("u", "у"), ("ʌ", "а"), ("ə", "е"), ("ɐ", "а"), ("a", "а"),
     ("p", "п"), ("b", "б"), ("t", "т"), ("ɾ", "т"), ("d", "д"), ("k", "к"), ("ɡ", "г"), ("g", "г"), ("f", "ф"),
@@ -130,7 +130,7 @@ def name(word: str, lang: str = "en-us") -> str | None:
                 out.append("-".join(LETTERS.get(c, c) for c in b.lower()))
             else:
                 out.append(ukr(b, lang) or b)
-    return "-".join(out)
+    return re.sub(r"-(?=\d)|(?<=\d)-", " ", "-".join(out))  # "ар 1": a hyphen glued the number to the letters
 
 
 def latin_words(text: str) -> list[str]:

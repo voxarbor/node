@@ -121,14 +121,27 @@ def english(text: str, lang: str = "en-us", cache: dict | None = None,
 
     def sub(m: re.Match) -> str:
         w = m.group(0)
-        if is_roman(w):
+        if is_roman(w) and (w not in ("I", "V", "X", "IV") or _numeral_here(text, m)):
             return w
         if w not in cache:
             cache[w] = phonemize.name(w, lang) or w
         used[w] = cache[w]
         return cache[w]
 
+    text = _SIZE.sub(r"\1 на \2", text)  # 3x3, 1920×1080
+    text = _DECADE.sub(r"\1-ті", text)  # 90s -> 90-ті (the worker reads it "дев'яності")
     return _LATIN.sub(sub, text), used
+
+
+_SIZE = re.compile(r"(?<!\w)(\d+) ?[xх×] ?(\d+)(?!\w)")
+_DECADE = re.compile(r"(?<!\w)(\d*0)['’]?s(?!\w)")
+
+
+def _numeral_here(text: str, m: re.Match) -> bool:
+    """I, V, X, IV are numerals only after a capitalised word or a name (Петро I, Rocky IV, iPhone X) or before
+    "століття"; after a common word they are letters (базу I, покемона IV -> ай-ві)."""
+    prev = re.search(r"(\S+)\s+$", text[:m.start()])
+    return bool(prev and re.search(r"[A-ZА-ЯІЇЄҐ]", prev.group(1)) or re.match(r"\s+ст", text[m.end():]))
 
 
 # Explicit pause markup "{пауза 0.8}" (also "{pause 0.8}", "0,8", "0.8 с"): 0.1-5 s of silence at that point. Right
