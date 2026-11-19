@@ -117,14 +117,17 @@ class Project:
     def env_get(self, key):
         for line in open(self.env_file):
             if line.startswith(key + "="):
-                return line.split("=", 1)[1].strip()
+                return re.split(r"\s+#", line.split("=", 1)[1], maxsplit=1)[0].strip()  # an inline comment is not part of it
         return None
 
     def tag(self):
-        return self.env_get("VOICE_CORE_TAG")
+        return self.env_get("VOXARBOR_NODE_TAG") or self.env_get("VOICE_CORE_TAG")
 
     def set_tag(self, tag):
-        self.env_write("VOICE_CORE_TAG", tag)
+        """VOXARBOR_NODE_TAG since 0.15.0; the old VOICE_CORE_TAG line goes (compose falls back to it only if unset)"""
+        self.env_write("VOXARBOR_NODE_TAG", tag)
+        if self.env_get("VOICE_CORE_TAG") is not None:
+            self.env_write("VOICE_CORE_TAG", None)
 
     def env_write(self, key, value):
         """set (value) or remove (None) one KEY= line of the owner's .env; nothing else changes"""
@@ -307,6 +310,7 @@ class Updater:
         self.idle_since = None
         self._repaired = None  # release whose opus models were checked (repair)
         self._repair_at = 0.0
+        self._mig_at = -1e9
 
     def files_for(self, tag):
         """the owner's compose files with the release's own ones taken from the verified cache"""
@@ -317,7 +321,7 @@ class Updater:
         return out
 
     def images(self, tag, man):
-        cmd, env = self.p.compose(self.files_for(tag), {"VOICE_CORE_TAG": tag})
+        cmd, env = self.p.compose(self.files_for(tag), {"VOXARBOR_NODE_TAG": tag, "VOICE_CORE_TAG": tag})
         refs = run(cmd + ["config", "--images"], env=env).stdout.split()
         need = {}
         for ref in sorted(set(refs)):
@@ -524,7 +528,7 @@ class Updater:
             return
         # cur may be "latest" (nodes of the coordinator's old installer): any signed release then pins it
         if not ver(cur):
-            self.st.set(warnings=[f"VOICE_CORE_TAG={cur} in .env is not a release version: "
+            self.st.set(warnings=[f"VOXARBOR_NODE_TAG={cur} in .env is not a release version: "
                                   + ("updating to the coordinator's " + tag if ver(tag) else "waiting for the coordinator's version")])
         if not ver(tag) or tag == cur:
             self.st.set(state="idle", available=None)
@@ -565,6 +569,126 @@ class Updater:
             return
         self.apply(tag, man)
 
+    # ------------------------------------------------------------ project rename (0.15.0)
+    def file_project(self):
+        """the project name compose.yaml asks for (top-level `name:`), as opposed to the one this stack runs under"""
+        cmd, env = self.p.compose()
+        i = cmd.index("-p")
+        out = run(cmd[:i] + cmd[i + 2:] + ["config", "--format", "json"], env=env).stdout
+        return json.loads(out).get("name")
+
+    def volumes_of(self, project):
+        """{volume key: docker volume name} of the configuration under the given project name"""
+        cmd, env = self.p.compose()
+        i = cmd.index("-p")
+        cmd = cmd[:i] + ["-p", project] + cmd[i + 2:]
+        vols = json.loads(run(cmd + ["--profile", "init", "config", "--format", "json"], env=env).stdout).get("volumes") or {}
+        return {k: v.get("name") for k, v in vols.items()}
+
+    def migrate_project(self):
+        """compose.yaml names a new project (voxarbor-node since 0.15.0) while this stack still runs under the old one:
+        copy every volume to its new name (only into an empty one: models are never downloaded again), stop the old
+        services (no volume is removed), start the new project, check its health; on failure go back to the old one.
+        The old volumes are removed by the new updater a day later (old_volumes_cleanup)."""
+        if time.monotonic() - self._mig_at < 300:
+            return
+        self._mig_at = time.monotonic()  # compose config costs a second: at most every 5 min
+        new = self.file_project()
+        old = self.p.name
+        if not new or new == old or not ver(self.p.tag() or ""):
+            return
+        marker = os.path.join(self.cache, "migration.json")
+        m = read_json(marker, {}) or {}
+        if m.get("failed_at") and time.time() - m["failed_at"] < 86400 and not desired().get("now"):
+            return
+        if desired().get("paused") or effective_mode(desired()) == "off":
+            return
+        if busy_streams() not in (0, None) or not tts_idle():
+            return  # the switch costs ~1-2 min of downtime: only when idle
+        tag = self.p.tag()
+        log(f"migrating the compose project {old} -> {new}")
+        self.st.set(state="updating", error=None)
+        vo, vn = self.volumes_of(old), self.volumes_of(new)
+        pairs = [(vo[k], vn[k]) for k in vn if k in vo and vo[k] and vn[k] and vo[k] != vn[k]]
+        cmd, env = self.p.compose()
+        i = cmd.index("-p")
+        new_cmd = cmd[:i] + ["-p", new] + cmd[i + 2:]
+        services = [x for x in run(cmd + ["config", "--services"], env=env).stdout.split() if x != "updater"]
+        try:
+            run(cmd + ["rm", "-sf"] + services, env=env, timeout=600)
+            for a, b in pairs:
+                if run(["docker", "volume", "inspect", a], check=False).returncode != 0:
+                    continue  # nothing to carry over
+                if run(["docker", "volume", "inspect", b], check=False).returncode != 0:
+                    key = next(k for k, v in vn.items() if v == b)
+                    run(["docker", "volume", "create", "--label", f"com.docker.compose.project={new}",
+                         "--label", f"com.docker.compose.volume={key}", "--label", "com.docker.compose.version=2", b])
+                empty = run(["docker", "run", "--rm", "--entrypoint", "sh", "-v", f"{b}:/to", self.p.image, "-c",
+                             "[ -z \"$(ls -A /to)\" ]"], check=False).returncode == 0
+                if empty:
+                    log(f"copying volume {a} -> {b}")
+                    run(["docker", "run", "--rm", "--entrypoint", "sh", "-v", f"{a}:/from:ro", "-v", f"{b}:/to",
+                         self.p.image, "-c", "cp -a /from/. /to/"], timeout=7200)
+            run(new_cmd + ["up", "-d", "--pull", "never"], env=env, timeout=1800)
+            # follow the new stack: join its network so gateway/connector resolve there
+            run(["docker", "network", "connect", f"{new}_default", self.p.container], check=False)
+            deadline, ok_since, why = time.time() + HEALTH_MIN * 60, None, "timeout"
+            while time.time() < deadline:
+                ok, why = self.healthy(tag)
+                ok_since = (ok_since or time.time()) if ok else None
+                if ok_since and time.time() - ok_since >= 30:
+                    break
+                time.sleep(10)
+            else:
+                raise RuntimeError(f"new project not healthy after {HEALTH_MIN:.0f} min: {why}")
+        except Exception as exc:  # noqa: BLE001
+            log("project migration failed:", exc, "- back to", old)
+            run(new_cmd + ["down"], env=env, check=False, timeout=600)  # no -v: nothing is lost
+            run(cmd + ["up", "-d", "--pull", "never"] + services, env=env, check=False, timeout=1800)
+            write_json(marker, {**m, "failed_at": time.time(), "error": str(exc)[:300]})
+            self.st.set(state="error", error=f"Перехід на нові імена ({new}) не вдався, вузол лишився на старих: {str(exc)[:150]}")
+            return
+        write_json(marker, {"from": old, "to": new, "at": time.time(), "old_volumes": [a for a, _ in pairs]})
+        self.p.own(marker)
+        log(f"project {new} is up and healthy; the old updater ({old}) removes itself")
+        self.st.set(state="idle", last_update={"from": f"{old} ({tag})", "to": f"{new} ({tag})", "ok": True,
+                                                "at": now_iso(), "error": None})
+        run(["docker", "run", "-d", "--rm", "-v", "/var/run/docker.sock:/var/run/docker.sock", "--entrypoint", "sh",
+             self.p.image, "-c", f"sleep 5; docker rm -f {self.p.container}; docker network rm {old}_default || true"])
+        time.sleep(3600)  # removed by the helper within seconds
+
+    def old_volumes_cleanup(self):
+        """a day after a successful project migration (and while healthy) the old volumes go"""
+        marker = os.path.join(self.cache, "migration.json")
+        m = read_json(marker, {}) or {}
+        if not m.get("old_volumes") or m.get("to") != self.p.name or time.time() - m.get("at", 0) < 86400:
+            return
+        ok, _ = self.healthy(self.p.tag())
+        if not ok:
+            return
+        for v in m["old_volumes"]:
+            r = run(["docker", "volume", "rm", v], check=False)
+            log(f"old volume {v}:", "removed" if r.returncode == 0 else (r.stderr or "").strip()[-120:])
+        write_json(marker, {**m, "old_volumes": [], "cleaned_at": time.time()})
+
+    def env_names(self):
+        """0.15.0: the tag variable is VOXARBOR_NODE_TAG; an .env with only the old VOICE_CORE_TAG is rewritten"""
+        if self.p.env_get("VOICE_CORE_TAG") is not None and self.p.env_get("VOXARBOR_NODE_TAG") is None:
+            self.p.set_tag(self.p.env_get("VOICE_CORE_TAG"))
+            log("renamed VOICE_CORE_TAG to VOXARBOR_NODE_TAG in .env")
+
+    def join_code_cleanup(self):
+        """the one-time join code has no use after the connector enrolled: it leaves .env"""
+        if not self.p.env_get("NODE_JOIN_CODE"):
+            return
+        try:
+            c = http_json(CONNECTOR, timeout=10)
+        except Exception:  # noqa: BLE001
+            return
+        if c.get("enrolled") and c.get("connected"):
+            self.p.env_write("NODE_JOIN_CODE", None)
+            log("removed the used NODE_JOIN_CODE from .env")
+
     def loop(self):
         log(f"node-updater {VERSION}, project {self.p.name} in {self.p.wd}, mode {ENV_MODE}")
         if self.st.d.get("pending_self"):
@@ -577,7 +701,11 @@ class Updater:
         errors = 0
         while True:
             try:
+                self.env_names()
+                self.migrate_project()
                 self.step()
+                self.old_volumes_cleanup()
+                self.join_code_cleanup()
                 errors = 0
             except Exception as exc:  # noqa: BLE001
                 errors += 1

@@ -522,7 +522,8 @@ class Link:
 # ---------------------------------------------------------------- main loop --------------------------------------
 async def session(http: aiohttp.ClientSession, state: dict) -> None:
     url = ws_url(COORDINATOR_URL)
-    headers = {"Authorization": f"Bearer {state['node_token']}", "X-Voice-Core-Protocol": str(PROTOCOL),
+    headers = {"Authorization": f"Bearer {state['node_token']}", "X-VoxArbor-Node-Protocol": str(PROTOCOL),
+               "X-Voice-Core-Protocol": str(PROTOCOL),  # the old name, until every node runs 0.15+
                "User-Agent": UA}
     try:
         ws_ctx = connect(url, additional_headers=headers, ssl=ssl_context() if url.startswith("wss") else None,
@@ -539,6 +540,7 @@ async def session(http: aiohttp.ClientSession, state: dict) -> None:
                 caps = {"schema": 1, "error": "local capabilities unavailable"}
             await ws.send(json.dumps({"type": "hello", "protocol": PROTOCOL, "node_name": NODE_NAME,
                                       "max_streams": MAX_STREAMS, "connector_version": VERSION,
+                                      "voxarbor_node_version": caps.get("voxarbor_node_version", caps.get("voice_core_version", RELEASE)),
                                       "voice_core_version": caps.get("voice_core_version", RELEASE),
                                       "capabilities": caps}, ensure_ascii=False))
             welcome = json.loads(await asyncio.wait_for(ws.recv(), 20))

@@ -109,12 +109,12 @@ class Sampler(threading.Thread):
                 s["containers"] = {}
                 for line in ds.splitlines():
                     n, c, m = line.split("\t")
-                    if "voice-core" not in n:
+                    if not n.startswith(("voxarbor-node-", "voice-core")):
                         continue
                     mu = m.split("/")[0].strip()
                     num = float(re.match(r"[\d.]+", mu).group())
                     mult = {"KiB": 1 / 1024 ** 2, "MiB": 1 / 1024, "GiB": 1, "B": 1 / 1024 ** 3}[re.sub(r"[\d.]+", "", mu)]
-                    s["containers"][n.replace("voice-core-", "").rsplit("-", 1)[0]] = {
+                    s["containers"][n.replace("voxarbor-node-", "").replace("voice-core-worker-", "").replace("voice-core-", "").rsplit("-", 1)[0]] = {
                         "cpu": float(c.rstrip("%")), "mem_gb": round(num * mult, 3)}
             except Exception as e:  # noqa: BLE001
                 s["docker_error"] = str(e)

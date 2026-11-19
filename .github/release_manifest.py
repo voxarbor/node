@@ -5,7 +5,7 @@ import hashlib, json, os, re, subprocess, sys
 
 tag = sys.argv[1]
 FILES = ("compose.yaml", "compose.gpu.yaml", "Caddyfile", "prune.sh")
-env = dict(os.environ, NODE_TOKEN="x", VOICE_CORE_TAG=tag, COMPOSE_PROFILES="fetch,init")
+env = dict(os.environ, NODE_TOKEN="x", VOXARBOR_NODE_TAG=tag, COMPOSE_PROFILES="fetch,init")
 
 
 def images(*files, extra=None):

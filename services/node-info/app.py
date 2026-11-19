@@ -17,7 +17,7 @@ import urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 TOKEN = os.environ["API_KEY"]
-TAG = os.environ.get("VOICE_CORE_VERSION", "")  # the tag the node pins (VOICE_CORE_TAG): v0.7.4, latest, ...
+TAG = os.environ.get("VOXARBOR_NODE_VERSION") or os.environ.get("VOICE_CORE_VERSION", "")  # the tag the node pins (VOICE_CORE_TAG): v0.7.4, latest, ...
 RELEASE = os.environ.get("VOICE_CORE_RELEASE", "dev")  # baked into the image by CI
 VERSION = TAG if TAG.startswith("v") and TAG[1:2].isdigit() else RELEASE
 SERVICES = {  # name -> base URL inside the node's compose network
@@ -254,6 +254,7 @@ def capabilities() -> dict:
     node["mode"] = os.environ.get("NODE_MODE", "normal")   # normal | gentle
     node["gpu_used"] = any(s.get("device") == "cuda" for s in services.values())
     return {"schema": 1, "product": "voxarbor-node", "product_version": VERSION,
+            "voxarbor_node_version": VERSION, "voxarbor_node_tag": TAG or None, "voxarbor_node_release": RELEASE,
             "voice_core_version": VERSION, "local_ai_version": VERSION,
             "voice_core_tag": TAG or None, "voice_core_release": RELEASE, "generated_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
             "node": node, "services": services, **updater(),

@@ -325,11 +325,13 @@ diarize, 1024 for TTS and translate). Default mode `normal`. `/capabilities` rep
 - Images share layers: tts and diarize are built on node-base-av (python + ffmpeg) and node-base-torch (cpu or
   cu128), so a node stores ffmpeg and torch once.
 
-## Internal names (kept on purpose)
+## Names (since 0.15.0)
 
-The product is called VoxArbor Node (voxarbor-node) since 0.11.0; it was voice-core before. These internal names stay
-as they were, so existing nodes need no migration (renaming volumes would mean copying gigabytes of models and
-risking the connector's node token): the compose project `voice-core-worker`, the volumes (`connector-state`,
-`hf-cache`, `tts-cache`, …), the `.env` variables (`VOICE_CORE_TAG`, …), the `/capabilities` fields
-`voice_core_version` / `voice_core_tag` / `voice_core_release` (now also `product` and `product_version`) and the
-`X-Voice-Core-Protocol` header of docs/connect.md. Images are `ghcr.io/voxarbor/node-<service>`.
+Everything a person sees on the node is called voxarbor-node: the compose project `voxarbor-node` (containers
+`voxarbor-node-<service>-1`, volumes `voxarbor-node_*`), the `.env` variable `VOXARBOR_NODE_TAG`, the folder
+`~/voxarbor-node` of new installs, the protocol header `X-VoxArbor-Node-Protocol` and the `/capabilities` keys
+`voxarbor_node_version`, `voxarbor_node_tag`, `voxarbor_node_release`. Until the three nodes of the 0.14 era have
+updated, the old names are also sent / read: `X-Voice-Core-Protocol`, `voice_core_*` keys, `VOICE_CORE_TAG` (compose
+falls back to it; the updater rewrites it to `VOXARBOR_NODE_TAG`). The updater moves a running node to the new
+project by itself (docs/updater.md «Project rename»): volumes are copied, models are not downloaded again. The
+repository stays voxarbor/node; image names did not change.

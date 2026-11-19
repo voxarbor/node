@@ -82,8 +82,8 @@ Cheap local checks: only this container's own compose project; manifest images o
 
 1. Verify manifest and files (above). Pull images by digest, tag them.
 2. Wait for the safe window.
-3. Back up the current `compose*.yaml`, `Caddyfile`, `prune.sh` and `VOICE_CORE_TAG` to `.updater/prev/`.
-4. Write the new files, set `VOICE_CORE_TAG=<tag>` in `.env` (only that line changes).
+3. Back up the current `compose*.yaml`, `Caddyfile`, `prune.sh` and `VOXARBOR_NODE_TAG` to `.updater/prev/`.
+4. Write the new files, set `VOXARBOR_NODE_TAG=<tag>` in `.env` (only that line changes).
 5. `init-opus` only if the manifest's `opus_models_tag` differs from the volume's `.models-version`.
 6. `docker compose up -d --pull never --remove-orphans`, for all services except `updater`.
 7. Health check, up to `UPDATER_HEALTH_MIN` (default 10) minutes: all services in `/capabilities` healthy and the
@@ -100,6 +100,20 @@ How the updater runs compose like the owner does: it reads its own container lab
 (`com.docker.compose.project`, `…project.working_dir`, `…project.config_files`, `…project.environment_file`) through
 the socket and reuses them. The node folder is mounted at the same absolute path inside the updater, so relative
 paths (`./Caddyfile`) resolve the same way. Works on Linux, WSL and Docker Desktop.
+
+## Project rename (0.15.0)
+
+When `compose.yaml` names a project (`name: voxarbor-node`) other than the one the stack runs under
+(`voice-core-worker`, or `voice-core` on a custom layout), the updater moves the node in an idle window: it stops the
+old services (no volume is removed), copies every volume to its new name (`docker volume create` with the compose
+labels, then `cp -a` in a short container, only into an empty volume), starts the new project, joins its network and
+checks health for up to `UPDATER_HEALTH_MIN` minutes. On success the old updater container removes itself, the new
+one takes over; the old volumes are removed a day later if the node is healthy (`.updater/migration.json`). On
+failure the new project goes down (without `-v`) and the old one comes back; the attempt is repeated after a day or on
+`now`. Volumes with explicit names (external volumes of an override) are left as they are. The node folder is not
+moved (bind mounts point at it).
+
+Also since 0.15.0: the updater removes `NODE_JOIN_CODE` from `.env` once the connector is enrolled and connected.
 
 ## Opus-MT models version (since 0.14.1)
 
