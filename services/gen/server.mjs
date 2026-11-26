@@ -22,7 +22,9 @@ const MEDIA_URL = (env.GEN_MEDIA_URL || "http://connector:8000/media").replace(/
 const CTL = env.UPDATER_CTL || "/ctl";
 const TTS_URL = (env.TTS_URL || "http://tts:8000").replace(/\/$/, "");
 const DEVICE = env.GEN_DEVICE || "cpu";                  // cuda on GPU nodes (compose.gpu.yaml): vulkan allowed
-const GL_DEFAULT = env.GEN_GL || (DEVICE === "cuda" ? "vulkan" : "swangle");
+// swangle everywhere by default: in WSL there is no NVIDIA Vulkan driver and Chrome silently falls back to software
+// (fi · vot · gpu: vulkan / angle / egl gave the same frames and were not faster). GEN_GL overrides.
+const GL_DEFAULT = env.GEN_GL || "swangle";
 const OUTPUT_TTL_S = Number(env.GEN_OUTPUT_TTL_S || 7200);
 const PROPS_MAX = 256 * 1024;
 const REMOTION = JSON.parse(fs.readFileSync(new URL("./node_modules/remotion/package.json", import.meta.url))).version;
@@ -173,6 +175,38 @@ function run(cmd, args) {
     err ? reject(new Error(`${cmd}: ${String(stderr || err.message).slice(0, 300)}`)) : resolve()));
 }
 
+// the bundle download runs in curl, a separate process: whatever happens to the transfer cannot take gen down
+// (undici's fetch asserted on large bodies, fi · vot · gpu: 600 MB). curl retries itself; sha256 is checked after.
+async function download(url, dest, job) {  // -> sha256 hex of what was written
+  const hdr = path.join(os.tmpdir(), `gen-auth-${process.pid}-${Date.now()}`);
+  await fsp.writeFile(hdr, `Authorization: Bearer ${API_KEY}\n`, { mode: 0o600 });  // not in the process list
+  try {
+    await new Promise((resolve, reject) => {
+      const p = spawn("curl", ["-fsS", "--retry", "5", "--retry-all-errors", "--retry-delay", "3",
+                               "--connect-timeout", "15", "--speed-limit", "1024", "--speed-time", "120",
+                               "-H", `@${hdr}`, "-o", dest, url], { stdio: ["ignore", "ignore", "pipe"] });
+      job.fetch_proc = p;
+      let err = "";
+      p.stderr.on("data", (d) => { err = (err + d).slice(-500); });
+      const tick = setInterval(() => fsp.stat(dest).then((st) => { job.fetched_bytes = st.size; }, () => {}), 1000);
+      p.on("close", (code) => {
+        clearInterval(tick); job.fetch_proc = null;
+        if (job.abort.signal.aborted) return reject(Object.assign(new Error("canceled"), { code: "canceled" }));
+        if (code === 0) return resolve();
+        const http4 = /error: (4\d\d)/.exec(err);
+        reject(Object.assign(new Error(`bundle download: curl ${code} ${err.trim()}`),
+                             { code: http4 ? "input_unavailable" : "input_fetch" }));
+      });
+    });
+  } finally {
+    await fsp.rm(hdr, { force: true });
+  }
+  const hash = createHash("sha256");
+  await pipeline(fs.createReadStream(dest), hash);
+  job.fetched_bytes = (await fsp.stat(dest)).size;
+  return hash.digest("hex");
+}
+
 async function ensureBundle(job) {
   const { sha256, bytes } = job.input;
   const dir = path.join(BUNDLES, sha256);
@@ -189,14 +223,14 @@ async function ensureBundle(job) {
     `less than ${MIN_FREE_GB} GB would stay free on the disk`), { code: "disk_full" });
   job.status = "fetching";
   const tmp = path.join(BUNDLES, `.${sha256}.${process.pid}.part`);
-  const r = await fetch(`${MEDIA_URL}/${sha256}`, { headers: { Authorization: `Bearer ${API_KEY}` }, signal: job.abort.signal });
-  if (!r.ok) throw Object.assign(new Error(`bundle ${sha256.slice(0, 12)}: HTTP ${r.status}`), { code: "input_unavailable" });
-  const hash = createHash("sha256");
-  let got = 0;
-  await pipeline(r.body, async function* (src) {
-    for await (const chunk of src) { hash.update(chunk); got += chunk.length; job.fetched_bytes = got; yield chunk; }
-  }, fs.createWriteStream(tmp));
-  if (hash.digest("hex") !== sha256) {
+  let digest;
+  try {
+    digest = await download(`${MEDIA_URL}/${sha256}`, tmp, job);
+  } catch (e) {
+    await fsp.rm(tmp, { force: true });
+    throw e;
+  }
+  if (digest !== sha256) {
     await fsp.rm(tmp, { force: true });
     throw Object.assign(new Error("bundle: sha256 does not match"), { code: "input_corrupt" });
   }
@@ -344,6 +378,7 @@ function cancel(job) {
   if (["done", "error", "canceled"].includes(job.status)) return;
   job.status = "canceled"; job.ended = now();
   job.abort.abort();
+  if (job.fetch_proc) { try { job.fetch_proc.kill("SIGKILL"); } catch { /* gone */ } }
   const i = queue.indexOf(job.id); if (i >= 0) queue.splice(i, 1);
   if (job.proc) { try { process.kill(-job.proc.pid, "SIGKILL"); } catch { /* gone */ } }  // render.mjs and its Chrome
 }
@@ -427,6 +462,14 @@ const server = http.createServer(async (req, res) => {
   }
 });
 
+// last line of defence: an unexpected error fails the running part instead of ending the service
+process.on("uncaughtException", (e) => {
+  log("uncaught:", e && e.stack || e);
+  if (running && !["done", "canceled"].includes(running.status)) {
+    running.status = "error"; running.error = String(e && e.message || e).slice(0, 300); running.error_code = "internal";
+  }
+});
+process.on("unhandledRejection", (e) => log("unhandled rejection:", e && e.stack || e));
 setInterval(() => { sampleLoad().catch(() => {}); pump().catch(() => {}); }, 5000);
 setInterval(async () => {  // results the coordinator did not fetch and delete
   const cut = now() - OUTPUT_TTL_S;

@@ -345,7 +345,8 @@ Model `remotion` (kind `render`) renders one part of a Remotion composition per 
 
 - `POST /gen/v1/jobs` `{id, model: "remotion", kind: "render", settings: {part: "video" | "audio" | "info",
   composition, props (≤ 256 KB), frames: [from, to] (inclusive), codec: h264 | h265, crf 0-51, pix_fmt: yuv420p |
-  yuv444p, concurrency 0-64 (0: half the cores), gl: "" | swangle | angle | vulkan (GPU nodes) | egl,
+  yuv444p, concurrency 0-64 (0: half the container's cores; more is clamped to them), gl: "" (swangle) | swangle |
+  angle | vulkan (GPU nodes only; not working under WSL) | egl,
   remotion_version}, inputs: [{role: "bundle", sha256, mime, bytes}]}` → 202. The same `id` again is the same job.
   Unknown keys, values out of range, another `remotion_version` → 422.
 - `GET /gen/v1/jobs/{id}` → `{status: queued | paused | fetching | running | done | error | canceled, progress,
@@ -364,7 +365,7 @@ Model `remotion` (kind `render`) renders one part of a Remotion composition per 
   inside (the remotion version). The node fetches it once from the coordinator (`GET /v1/nodes/media/{sha256}`
   through the connector's internal `/media/{sha256}`: the node token stays in the connector), checks sha256,
   unpacks it into the `gen-cache` volume: LRU up to `GEN_CACHE_GB` (20), refused when less than `GEN_MIN_FREE_GB`
-  (10) would stay free.
+  (10) would stay free. The download runs in curl (retries, then sha256), so a broken transfer only fails the part.
 - `/capabilities` `models[]` `remotion`: `busy`, `paused`, `busy_reason`, `bundles` (cached sha256), `versions`,
   `fps` (frames per second of rendering, last hour), `perf`, `slots` 1, `settings` (JSON Schema). `resources` has
   `cpu_cores` and `cpu_free_cores`.

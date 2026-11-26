@@ -3,7 +3,7 @@
 # for gl=vulkan|angle|egl on GPU nodes (the NVIDIA driver libraries come from the container toolkit at run time).
 FROM node:22.23.5-bookworm-slim
 ENV NODE_ENV=production HOME=/tmp
-RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates unzip \
+RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates curl unzip \
       libnss3 libnspr4 libdbus-1-3 libatk1.0-0 libatk-bridge2.0-0 libcups2 libdrm2 libgbm1 libasound2 libxrandr2 \
       libxkbcommon0 libxfixes3 libxcomposite1 libxdamage1 libxext6 libx11-6 libxcb1 libpango-1.0-0 libcairo2 \
       libexpat1 libglib2.0-0 fonts-dejavu-core fonts-noto-color-emoji libvulkan1 libegl1 \

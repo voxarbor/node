@@ -49,7 +49,8 @@ services:
       DIARIZE_IMAGE: ${REGISTRY:-ghcr.io/voxarbor}/node-diarize-cuda:${VOXARBOR_NODE_TAG:-v0.18.0}
       TTS_IMAGE: ${REGISTRY:-ghcr.io/voxarbor}/node-tts-cuda:${VOXARBOR_NODE_TAG:-v0.18.0}
 
-  # Remotion Render on a GPU node: gl=vulkan by default (the NVIDIA Vulkan driver comes with "graphics")
+  # Remotion Render on a GPU node: gl stays swangle (CPU) by default: in WSL there is no NVIDIA Vulkan driver and
+  # Chrome silently renders in software. The GPU here only lets gen see the GPU load (the owner playing = busy).
   gen:
     image: ${REGISTRY:-ghcr.io/voxarbor}/node-gen:${VOXARBOR_NODE_TAG:-v0.18.0}
     environment:

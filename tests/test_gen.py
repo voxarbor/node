@@ -189,6 +189,29 @@ try:
     assert wait("r-1-b-1")["status"] == "done"
     print("busy ok")
 
+    # large bundles (~320 MB, three cold downloads from an HTTP/1.0 server that closes the connection): the
+    # download must not take gen down (undici's fetch did, 3 of 6 times at 600 MB)
+    import tarfile
+    for k in range(3):
+        big = os.path.join(work, "big.tgz")
+        pack = os.path.join(work, "pack")
+        os.makedirs(pack, exist_ok=True)
+        with tarfile.open(os.path.join(media, SHA)) as t:
+            t.extractall(pack, filter="data")
+        open(os.path.join(pack, "padding.bin"), "wb").write(os.urandom(320 * 1024 * 1024))
+        sh("tar", "-cf", big, "-C", pack, ".")
+        braw = open(big, "rb").read()
+        bsha = hashlib.sha256(braw).hexdigest()
+        os.rename(big, os.path.join(media, bsha))
+        sh("rm", "-rf", pack)
+        body = {**job(f"r-big-{k}", part="info"), "inputs": [{"role": "bundle", "sha256": bsha, "bytes": len(braw)}]}
+        assert call("POST", "/v1/jobs", body)[0] == 202
+        j = wait(f"r-big-{k}")
+        assert j["status"] == "done" and j["fetched_bytes"] == len(braw), j
+        assert json.load(urllib.request.urlopen(f"http://127.0.0.1:{PORT}/health"))["status"] == "ok"
+        os.remove(os.path.join(media, bsha))
+    print("large bundles ok (3 x 320 MB)")
+
     # GEN_PAUSE=1: paused in health, the cache survives a restart
     h = start_gen("-e", "GEN_PAUSE=1")
     assert h["paused"] and h["busy"] and h["bundles"] == [], h  # a new container without the cache volume
