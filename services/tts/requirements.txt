@@ -1,9 +1,9 @@
 numpy==1.26.4
-transformers==5.23.0
+transformers==5.24.1
 tokenizers==0.23.3
 huggingface-hub>=1.16,<2
-ctranslate2==4.6.0
-sentencepiece==0.2.1
+ctranslate2==4.9.1
+sentencepiece==0.2.3
 stanza==1.15.1
 marisa-trie==1.2.1
 six==1.17.0
@@ -18,4 +18,4 @@ fastapi==0.162.0
 uvicorn==0.54.0
 ukrainian_accentor @ git+https://github.com/egorsmkv/ukrainian-accentor@3dff5ecd2ac91e879086c0e2a7f1ce079603c9f1
 ipa-uk @ git+https://github.com/patriotyk/ipa-uk@3faf05ec50fd4880965b6c76f8e479a4f82117f5
-styletts2-inference @ git+https://github.com/patriotyk/styletts2-inference@209352700cf703a05ff94501290095dd9072fd5f
+styletts2-inference @ git+https://github.com/patriotyk/styletts2-inference@d1dd6ffda4a580fea74fd7305676722aae883e52
