@@ -959,8 +959,53 @@ async def phonemize_names(req: PhonemizeRequest) -> dict:
     return {"lang": req.lang, "items": await asyncio.to_thread(lambda: [one(w) for w in words])}
 
 
+# Weights of engines this node does not run (owner 2026-11-26): StyleTTS2 is downloaded on first use only; a node
+# where it is off (not in TTS_ENGINES) drops what an earlier version or an earlier setting left in the HF cache.
+UNUSED_MODEL_REPOS = {"styletts2": ("patriotyk/styletts2_ukrainian_multispeaker", "patriotyk/styletts2_ukrainian_single")}
+
+
+def drop_unused_models(hub: str | None = None) -> int:
+    """Deletes the HF cache of disabled engines (repo dir + blobs no other repo uses); returns bytes freed."""
+    hub = hub or os.path.join(os.environ.get("HF_HOME", "/cache/hf"), "hub")
+    if not os.path.isdir(hub):
+        return 0
+    drop = [f"models--{r.replace('/', '--')}" for e, repos in UNUSED_MODEL_REPOS.items() if e not in worker.ENGINES
+            for r in repos]
+    drop = [d for d in drop if os.path.isdir(os.path.join(hub, d))]
+    if not drop:
+        return 0
+
+    def files(repo_dir: str) -> set[str]:  # every real file a repo's snapshots and blobs point to
+        out = set()
+        for root, _, names in os.walk(repo_dir):
+            for n in names:
+                p = os.path.realpath(os.path.join(root, n))
+                if os.path.isfile(p):
+                    out.add(p)
+        return out
+
+    keep = set()
+    for d in os.listdir(hub):
+        if d.startswith(("models--", "datasets--", "spaces--")) and d not in drop:
+            keep |= files(os.path.join(hub, d))
+    freed = 0
+    for d in drop:
+        path = os.path.join(hub, d)
+        for f in files(path) - keep:
+            try:
+                freed += os.path.getsize(f)
+                os.remove(f)
+            except OSError:
+                pass
+        shutil.rmtree(path, ignore_errors=True)
+        log.warning("removed the cache of a disabled model: %s", d)
+    return freed
+
+
 async def main() -> None:
     asyncio.create_task(_reaper())
+    asyncio.get_running_loop().run_in_executor(None, lambda: (lambda n: n and log.warning(
+        "freed %.2f GB of disabled models", n / 1e9))(drop_unused_models()))
     JOBS.start()
     servers = [uvicorn.Server(uvicorn.Config(app, host="0.0.0.0", port=8000, access_log=False))]
     if ENABLE_UI:
