@@ -317,7 +317,8 @@ limit, 1 in economy mode}.
   engine. `multi` / `single` keep their old StyleTTS2 meaning; without `model` nothing changes.
 - `settings`: the model's settings, by the JSON Schema in its `models` entry. Unknown keys or values out of range:
   422. Holos and StyleTTS2 take none; OmniVoice takes `num_step` (4-64, 32), `guidance_scale` (0-5, 2.0),
-  `instructions` (voice design in English: «female, low pitch, british accent») and `seed` (-1 random).
+  `instructions` (voice design in English: «female, low pitch, british accent»), `seed` (-1 random; the same seed
+  gives the same audio) and `speed` (0.5-1.5, time-stretch; overrides the request's `speed`).
 
 `features` of the tts service has `model_settings` from this version on.
 
@@ -332,6 +333,7 @@ of a 3-10 s recording, any format ffmpeg reads), `ref_text` (what it says), `sha
 `name`, `gender`, `consent_ref`. Without `model` it is a Holos voice (`vector`) as before. The node keeps the
 recording; tts-omnivoice keeps voices only in RAM, so node-tts registers a voice again when the server lost it.
 `GET /tts/v1/voices/custom` lists `model` with every voice; use `voice: "custom:<id>"` with the voice's model.
+`/capabilities` `services.tts.custom_voices` stays {id: sha256}; `custom_voice_models` adds {id: model}.
 
 ## Translation engine
 

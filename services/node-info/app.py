@@ -289,6 +289,8 @@ def capabilities() -> dict:
                     cv = get(f"{url}/v1/voices/custom", timeout=5)
                     s["voice_create"] = {"zero_shot": cv.get("zero_shot", True), "finetune": cv.get("finetune", False)}
                     s["custom_voices"] = {k: v.get("sha256") for k, v in cv.get("voices", {}).items()}
+                    # which model each voice belongs to (holos | omnivoice); custom_voices keeps {id: sha256}
+                    s["custom_voice_models"] = {k: v.get("model", "holos") for k, v in cv.get("voices", {}).items()}
                 except Exception:  # an older TTS image
                     s["voice_create"] = {"zero_shot": False, "finetune": False}
                     s["custom_voices"] = {}

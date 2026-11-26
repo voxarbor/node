@@ -52,7 +52,10 @@ OMNI_SETTINGS = {"type": "object", "additionalProperties": False, "properties": 
     "instructions": {"type": "string", "maxLength": 300,
                      "description": "voice design in English: gender, age, pitch, accent, whisper (comma-separated)"},
     "seed": {"type": "integer", "minimum": -1, "maximum": 2147483647, "default": -1,
-             "description": "-1: random; the same seed gives the same audio"}}}
+             "description": "-1: random; the same seed gives the same audio"},
+    "speed": {"type": "number", "minimum": 0.5, "maximum": 1.5, "default": 1.0,
+              "description": "tempo (time-stretch after synthesis); overrides the request's speed"}}}
+OMNI_SERVER_KEYS = ("num_step", "guidance_scale", "instructions", "seed")  # what tts-server itself takes
 STRESS = os.environ.get("TTS_STRESS", "accentuk")  # accentuk | word-stress
 ACCENTUK_MODE = os.environ.get("ACCENTUK_MODE", "light")  # light (CT2 INT8) | full (FP32 + spaCy TRF)
 VERBALIZER = os.environ.get("TTS_VERBALIZER", "accentuk")  # accentuk (span model) | m2m100 (seq2seq, slower)
@@ -457,7 +460,7 @@ def _omni_speak(text: str, voice: str, settings: dict | None):
     elif OMNI_DESIGN.get(voice):
         body["instructions"] = OMNI_DESIGN[voice]
     for k, v in (settings or {}).items():
-        if k in OMNI_SETTINGS["properties"] and v not in (None, ""):
+        if k in OMNI_SERVER_KEYS and v not in (None, ""):
             body[k] = v
     for attempt in (1, 2):
         try:
@@ -490,6 +493,7 @@ def synthesize(text: str, voice: str | None, speed: float, model: str, pause_ms:
     omni = engine == "omnivoice"
     if omni:  # no stress marks or IPA: OmniVoice reads plain text (numbers spelled out by the verbalizer)
         voice = resolve_voice("omnivoice", voice)
+        speed = float((settings or {}).get("speed", speed))
 
         def generate(ps):
             wav = _omni_speak(ps, voice, settings)
