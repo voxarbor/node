@@ -14,7 +14,8 @@ COPY patches /patches
 RUN git clone -q https://github.com/ServeurpersoCom/omnivoice.cpp.git /src && cd /src && git checkout -q $OMNIVOICE_COMMIT \
     && git submodule update --init --recursive -q && git apply /patches/*.patch \
     && if [ "$VARIANT" = cuda ]; then \
-         set -- -DGGML_CUDA=ON -DCMAKE_CUDA_COMPILER=/usr/local/cuda/bin/nvcc "-DCMAKE_CUDA_ARCHITECTURES=75;86;89;120" \
+         set -- -DGGML_CUDA=ON -DGGML_CUDA_NCCL=OFF -DCMAKE_CUDA_COMPILER=/usr/local/cuda/bin/nvcc \
+                "-DCMAKE_CUDA_ARCHITECTURES=75;86;89;120" \
                 -DCMAKE_EXE_LINKER_FLAGS=-Wl,--allow-shlib-undefined -DCMAKE_SHARED_LINKER_FLAGS=-Wl,--allow-shlib-undefined; \
        else set --; fi \
     && cmake -S . -B build -DCMAKE_BUILD_TYPE=Release "$@" >/dev/null \
@@ -31,6 +32,10 @@ COPY --from=build /out/tts-server /usr/local/bin/
 COPY --from=build /out/lib/ /usr/local/lib/omnivoice/
 COPY fetch-weights.sh run.sh NOTICE /app/
 ENV LD_LIBRARY_PATH=/usr/local/lib/omnivoice OMNIVOICE_DIR=/models OMNIVOICE_QUANT=Q8_0 OMNIVOICE_LANG=Ukrainian
+# every library must resolve inside the image; only libcuda.so.1 comes from the host driver at run time
+# (NCCL is off above: one GPU, and the runtime image has no libnccl)
+RUN missing=$(ldd /usr/local/bin/tts-server /usr/local/lib/omnivoice/*.so* 2>/dev/null | grep "not found" | grep -v "libcuda.so.1" | sort -u); \
+    if [ -n "$missing" ]; then echo "unresolved libraries:"; echo "$missing"; exit 1; fi
 RUN mkdir -p /models && chown 65534:65534 /models
 USER 65534:65534
 EXPOSE 8080
