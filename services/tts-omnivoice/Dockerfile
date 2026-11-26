@@ -10,7 +10,9 @@ ARG OMNIVOICE_COMMIT=a650381a67905fd6ad08b323ed026b042a07b623
 RUN apt-get update && apt-get install -y --no-install-recommends build-essential cmake git ca-certificates \
     && rm -rf /var/lib/apt/lists/*
 COPY patches /patches
-# num_step / guidance_scale per request (patches/): the upstream server takes them only on the CLI
+# num_step / guidance_scale per request (patches/): the upstream server takes them only on the CLI.
+# CPU code for any x86-64 with AVX2/FMA/F16C/BMI2 (Haswell and newer), not -march=native of the CI runner: built
+# native, it died with SIGILL on a CPU without AVX-512 (found by fi · vot · gpu).
 RUN git clone -q https://github.com/ServeurpersoCom/omnivoice.cpp.git /src && cd /src && git checkout -q $OMNIVOICE_COMMIT \
     && git submodule update --init --recursive -q && git apply /patches/*.patch \
     && if [ "$VARIANT" = cuda ]; then \
@@ -18,7 +20,8 @@ RUN git clone -q https://github.com/ServeurpersoCom/omnivoice.cpp.git /src && cd
                 "-DCMAKE_CUDA_ARCHITECTURES=75;86;89;120" \
                 -DCMAKE_EXE_LINKER_FLAGS=-Wl,--allow-shlib-undefined -DCMAKE_SHARED_LINKER_FLAGS=-Wl,--allow-shlib-undefined; \
        else set --; fi \
-    && cmake -S . -B build -DCMAKE_BUILD_TYPE=Release "$@" >/dev/null \
+    && cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DGGML_NATIVE=OFF -DGGML_AVX=ON -DGGML_AVX2=ON -DGGML_FMA=ON \
+         -DGGML_F16C=ON -DGGML_BMI2=ON "$@" >/dev/null \
     && cmake --build build --config Release -j "$(nproc)" --target tts-server \
     && mkdir -p /out/lib && cp build/tts-server /out/ && cp -P build/*.so* /out/lib/ \
     && if [ "$VARIANT" = cuda ]; then cp -P /usr/local/cuda/lib64/libcublas.so.12* /usr/local/cuda/lib64/libcublasLt.so.12* /out/lib/; fi
