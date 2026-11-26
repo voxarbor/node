@@ -25,10 +25,6 @@ services:
       TTS_DEVICE: cuda
       NVIDIA_VISIBLE_DEVICES: ${NODE_GPUS:-all}   # e.g. NODE_GPUS=0: only the first GPU
       QUEUE_MAX: ${TTS_GPU_QUEUE_MAX:-16}   # a GPU node is fast: let the coordinator queue more
-      # OmniVoice (COMPOSE_PROFILES=omnivoice + TTS_ENGINES=holos,omnivoice): node-tts sends model "omnivoice" there
-      OMNIVOICE_URL: ${OMNIVOICE_URL:-http://tts-omnivoice:8080}
-      OMNIVOICE_LANG: ${OMNIVOICE_LANG:-Ukrainian}
-      OMNIVOICE_QUANT: ${OMNIVOICE_QUANT:-Q8_0}
 
   diarize:
     <<: *gpu
@@ -66,30 +62,3 @@ services:
         reservations:
           devices:
             - { driver: nvidia, count: all, capabilities: [gpu, utility, compute, graphics] }
-
-  # OmniVoice TTS (k2-fsa, weights CC-BY-NC-4.0: non-commercial; see services/tts-omnivoice/NOTICE), omnivoice.cpp
-  # tts-server on the GPU, ~1.5 GB VRAM (Q8_0). Only inside the node network: node-tts is its only client. Weights
-  # (~0.9 GB Q8_0, ~1.6 GB BF16) are downloaded once into the omnivoice-models volume, checked by sha256.
-  tts-omnivoice:
-    <<: *gpu
-    profiles: ["omnivoice"]
-    image: ${REGISTRY:-ghcr.io/voxarbor}/node-tts-omnivoice-cuda:${VOXARBOR_NODE_TAG:-v0.18.0}
-    restart: unless-stopped
-    environment:
-      OMNIVOICE_QUANT: ${OMNIVOICE_QUANT:-Q8_0}   # Q8_0 | BF16 (a bit cleaner, ~2.1 GB VRAM)
-      OMNIVOICE_LANG: ${OMNIVOICE_LANG:-Ukrainian}
-      NVIDIA_VISIBLE_DEVICES: ${NODE_GPUS:-all}
-    volumes:
-      - omnivoice-models:/models
-    logging:
-      driver: json-file
-      options: { max-size: "10m", max-file: "3" }
-    deploy:
-      resources:
-        limits: { cpus: "2", memory: 3g }
-        reservations:
-          devices:
-            - { driver: nvidia, count: all, capabilities: [gpu, utility, compute] }
-
-volumes:
-  omnivoice-models:

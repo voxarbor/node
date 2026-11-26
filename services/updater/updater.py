@@ -593,8 +593,36 @@ class Updater:
             self.p.env_write("NODE_JOIN_CODE", None)
             log("removed the used NODE_JOIN_CODE from .env")
 
+    # services removed from the node (owner 2026-11-26: OmniVoice): their containers, data volumes, images, .env words
+    RETIRED = {"tts-omnivoice": {"volume": "omnivoice-models", "image": "ghcr.io/voxarbor/node-tts-omnivoice-cuda",
+                                 "env": {"COMPOSE_PROFILES": "omnivoice", "TTS_ENGINES": "omnivoice"}}}
+
+    def retired_cleanup(self):
+        for svc, r in self.RETIRED.items():
+            ids = run(["docker", "ps", "-aq", "--filter", f"label=com.docker.compose.project={self.p.name}",
+                       "--filter", f"label=com.docker.compose.service={svc}"], check=False).stdout.split()
+            if ids and run(["docker", "rm", "-f", *ids], check=False).returncode == 0:
+                log("removed the container of the retired service", svc)
+            vol = f"{self.p.name}_{r['volume']}"
+            if run(["docker", "volume", "inspect", vol], check=False).returncode == 0 \
+                    and run(["docker", "volume", "rm", vol], check=False).returncode == 0:
+                log("removed the volume of the retired service", vol)
+            imgs = run(["docker", "images", "-q", r["image"]], check=False).stdout.split()
+            if imgs and run(["docker", "rmi", "-f", *sorted(set(imgs))], check=False).returncode == 0:
+                log("removed the images of the retired service", r["image"])
+            for key, word in r["env"].items():
+                val = self.p.env_get(key) or ""
+                items = [x for x in val.replace(" ", "").split(",") if x]
+                if word in items:
+                    self.p.env_write(key, ",".join(x for x in items if x != word) or None)
+                    log(f"removed {word} from {key} in .env")
+
     def loop(self):
         log(f"node-updater {VERSION}, project {self.p.name} in {self.p.wd}, mode {ENV_MODE}")
+        try:
+            self.retired_cleanup()
+        except Exception as exc:  # noqa: BLE001
+            log("retired cleanup:", exc)
         if self.st.d.get("pending_self"):
             # first start after replacing myself: the previous updater image is free now, prune it too
             cmd, env = self.p.compose()

@@ -90,7 +90,7 @@ async def run(fn, *args, request: Request | None = None):
                 waiter.add_done_callback(lambda f: f.cancelled() or f.exception())  # its Cancelled is expected
                 raise HTTPException(499, "client disconnected")
         return await waiter
-    except worker.Unavailable as exc:  # tts-omnivoice restarting or down
+    except worker.Unavailable as exc:  # a backend service restarting or down
         raise HTTPException(503, str(exc)) from None
     finally:
         _busy -= 1
@@ -125,10 +125,10 @@ class SpeechRequest(BaseModel):
     engine: str | None = Field(None, description="'styletts2' or 'holos' (default TTS_DEFAULT_ENGINE)")
     voice: str | None = Field(None, description="Preset name, a favorite alias (male, male2, male3, female, female2) or custom:<id> (Holos); omitted = male")
     speed: float = Field(1.0, ge=0.5, le=2.0)
-    model: str = Field("multi", description="a model id from /capabilities models (holos, styletts2, omnivoice) picks "
+    model: str = Field("multi", description="a model id from /capabilities models (holos, styletts2) picks "
                        "the engine; styletts2 only: 'multi' (31 voices) or 'single' (one male voice)")
     settings: dict | None = Field(None, description="the model's settings, by the JSON Schema in /capabilities models "
-                                                     "(omnivoice: num_step, guidance_scale, instructions, seed)")
+                                                     "(none for holos and styletts2 so far)")
     verbalize: bool = Field(False, description="Spell out numbers/abbreviations first (seq2seq model)")
     lexicon: bool = Field(True, description="false: read without any lexicon rule (stress, name, replace, regex), "
                                             "e.g. to hear a word as the automatic stress says it")
@@ -196,7 +196,7 @@ def _validate(req: SpeechRequest, max_chars: int = MAX_CHARS, formats=FORMATS) -
 
 def model_settings(engine: str) -> dict:
     """JSON Schema of the settings a model accepts (published in /capabilities models)"""
-    return worker.OMNI_SETTINGS if engine == "omnivoice" else {"type": "object", "properties": {},
+    return {"type": "object", "properties": {},
                                                                  "additionalProperties": False}
 
 
@@ -320,8 +320,7 @@ async def health() -> dict:
     loading = _warming is not None and not _warming.done()  # models are being loaded by /v1/warmup
     return {"status": "ok", "loaded": _pool is not None and not loading, "loading": loading, "idle_ttl": IDLE_TTL,
             "ui": ENABLE_UI, "jobs": JOBS.counts(), "busy": _busy, "queue_max": QUEUE_MAX, "device": _device(),
-            "features": FEATURES, "model_info": _model_info(), "perf": PERF.summary(),
-            **({"omnivoice": o} if (o := await asyncio.to_thread(_omni_health)) else {})}
+            "features": FEATURES, "model_info": _model_info(), "perf": PERF.summary()}
 
 
 def _model_info() -> dict:
@@ -336,27 +335,6 @@ def _model_info() -> dict:
     return {"holos_revision": os.environ.get("HOLOS_REVISION"), "holos_tts": ver("holos-tts"),
             "stress": worker.STRESS, "accentuk": ver("accentuk"), "accentuk_mode": worker.ACCENTUK_MODE,
             "verbalizer": worker.VERBALIZER}
-
-
-OMNI_REVISION = "Serveurperso/OmniVoice-GGUF@0170941"  # = services/tts-omnivoice/fetch-weights.sh
-_omni_state = {"at": 0.0, "ok": False}
-
-
-def _omni_health() -> dict | None:
-    """tts-omnivoice up? (cached 10 s; /health is polled by node-info every 30 s)"""
-    if "omnivoice" not in worker.ENGINES:
-        return None
-    if time.monotonic() - _omni_state["at"] > 10:
-        try:
-            worker._omni_call("/health", method="GET", timeout=2)
-            ok = True
-        except Exception:
-            ok = False
-        _omni_state.update(at=time.monotonic(), ok=ok)
-    return {"available": _omni_state["ok"], "device": os.environ.get("OMNIVOICE_DEVICE_KIND", "cuda"),
-            "revision": f"{OMNI_REVISION} {os.environ.get('OMNIVOICE_QUANT', 'Q8_0')}",
-            "quant": os.environ.get("OMNIVOICE_QUANT", "Q8_0"), "license": "cc-by-nc-4.0",
-            "settings": worker.OMNI_SETTINGS}
 
 
 def _device() -> str:
@@ -455,13 +433,6 @@ def voices_info() -> dict:
         engines[engine] = {"default": aliases.get("male") or (favorites or names)[0], "aliases": aliases,
                            "favorites": favorites, "voices": favorites + [n for n in names if n not in favorites],
                            "meta": voice_meta(engine, names), "markup": MARKUP}
-    if "omnivoice" in engines:  # voice design presets; no stress marks or respelling (it reads plain text)
-        engines["omnivoice"]["meta"] = {
-            "male": {"gender": "male", "label": "Чоловічий"},
-            "female": {"gender": "female", "label": "Жіночий"},
-            "auto": {"gender": "male", "label": "Авто (за мовцем)"}}
-        engines["omnivoice"]["markup"] = [m for m in MARKUP if m["id"] not in ("stress", "stress_long", "respell")]
-        engines["omnivoice"]["settings"] = worker.OMNI_SETTINGS
     for vid, v in worker.custom_voices().items():  # custom voices after the presets of their model
         m = v.get("model", "holos")
         if m in engines:
@@ -525,50 +496,14 @@ async def voices_encode(request: Request, audio: UploadFile = File(...)) -> dict
 
 
 class CustomVoice(BaseModel):
-    model: str = Field("holos", pattern=r"^(holos|omnivoice)$", description="the model the voice belongs to")
+    model: str = Field("holos", pattern=r"^holos$", description="the model the voice belongs to")
     name: str = Field(..., min_length=1, max_length=64, description="display name")
     gender: str = Field(..., pattern=r"^(male|female|child)$")
     vector: list[float] | None = Field(None, min_length=256, max_length=256,
                                        description="holos: from POST /v1/voices/encode")
-    ref_audio: str | None = Field(None, max_length=14_000_000, description="omnivoice: base64 of a 3-10 s recording "
-                                                                          "(wav, opus, any format ffmpeg reads)")
-    ref_text: str | None = Field(None, min_length=1, max_length=1000, description="omnivoice: what the recording says")
     sha256: str = Field(..., pattern=r"^[0-9a-f]{64}$",
-                        description="holos: sha256 of the vector as 256 LE float32; omnivoice: of the ref_audio bytes")
+                        description="sha256 of the vector as 256 LE float32")
     consent_ref: str = Field(..., min_length=1, max_length=200, description="the coordinator's consent record")
-
-
-async def _omni_reference(voice_id: str, req: CustomVoice) -> None:
-    """omnivoice: checks and stores the recording as <id>.wav (24 kHz mono 16-bit, at most 30 s)"""
-    import base64
-    import hashlib
-    import tempfile
-
-    if "omnivoice" not in worker.ENGINES:
-        raise HTTPException(409, "model omnivoice is not enabled on this node")
-    if not req.ref_audio or not req.ref_text:
-        raise HTTPException(422, "model omnivoice: ref_audio (base64) and ref_text are required")
-    try:
-        raw = base64.b64decode(req.ref_audio, validate=True)
-    except ValueError:
-        raise HTTPException(422, "ref_audio: not base64") from None
-    if hashlib.sha256(raw).hexdigest() != req.sha256:
-        raise HTTPException(400, "sha256 does not match the ref_audio bytes")
-    with tempfile.TemporaryDirectory(prefix="ref-") as tmp:
-        src, wav = os.path.join(tmp, "in"), os.path.join(tmp, "ref.wav")
-        open(src, "wb").write(raw)
-        p = await asyncio.create_subprocess_exec("ffmpeg", "-nostdin", "-loglevel", "error", "-y", "-i", src, "-t", "30",
-                                                 "-ac", "1", "-ar", "24000", "-c:a", "pcm_s16le", wav,
-                                                 stderr=asyncio.subprocess.PIPE)
-        _, err = await p.communicate()
-        if p.returncode != 0 or not os.path.isfile(wav):
-            raise HTTPException(422, f"ref_audio: not a readable audio file: {err.decode(errors='replace')[-200:]}")
-        if os.path.getsize(wav) < 3 * 24000 * 2:
-            raise HTTPException(422, "ref_audio: too short, give 3-10 s")
-        os.makedirs(worker.CUSTOM_DIR, exist_ok=True)
-        dst = os.path.join(worker.CUSTOM_DIR, f"{voice_id}.wav")  # /tmp and the cache volume: other filesystems
-        shutil.copyfile(wav, dst + ".tmp")
-        os.replace(dst + ".tmp", dst)
 
 
 @app.put("/v1/voices/custom/{voice_id}", dependencies=[Depends(auth)])
@@ -588,21 +523,14 @@ async def voices_custom_put(voice_id: str, req: CustomVoice) -> dict:
     existed = os.path.isfile(path)
     if not existed and len(worker.custom_voices()) >= CUSTOM_MAX:
         raise HTTPException(409, f"this node holds the maximum of {CUSTOM_MAX} custom voices")
-    if req.model == "omnivoice":
-        await _omni_reference(voice_id, req)
-    elif os.path.isfile(os.path.join(worker.CUSTOM_DIR, f"{voice_id}.wav")):  # was an omnivoice voice before
+    if os.path.isfile(os.path.join(worker.CUSTOM_DIR, f"{voice_id}.wav")):  # an OmniVoice recording of 0.17
         os.remove(os.path.join(worker.CUSTOM_DIR, f"{voice_id}.wav"))
-    fields = req.model_dump(exclude={"ref_audio"} | ({"vector"} if req.model == "omnivoice" else {"ref_text"}))
+    fields = req.model_dump()
     rec = {"id": voice_id, **fields, "created": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())}
     tmp = path + ".tmp"
     with open(tmp, "w", encoding="utf-8") as f:
         json.dump(rec, f, ensure_ascii=False)
     os.replace(tmp, path)
-    if req.model == "omnivoice":  # best effort now; a synthesis registers it again if tts-omnivoice lost it
-        try:
-            await asyncio.to_thread(worker.omni_register, voice_id)
-        except Exception as exc:  # incl. a restarting tts-omnivoice: the voice is stored, synthesis registers it
-            log.warning("omnivoice voice %s not registered yet: %s", voice_id, exc)
     return {"id": voice_id, "model": req.model, "voice": f"custom:{voice_id}", "sha256": req.sha256,
             "status": "replaced" if existed else "created"}
 
@@ -616,8 +544,7 @@ async def voices_custom_delete(voice_id: str) -> dict:
     wav = os.path.join(worker.CUSTOM_DIR, f"{voice_id}.wav")
     if os.path.isfile(wav):
         os.remove(wav)
-        if worker.OMNIVOICE_URL:
-            await asyncio.to_thread(worker.omni_unregister, voice_id)
+
     return {"id": voice_id, "status": "deleted"}
 
 
@@ -1002,8 +929,25 @@ def drop_unused_models(hub: str | None = None) -> int:
     return freed
 
 
+def drop_retired_voices() -> int:
+    """custom voices of a model this node no longer has (OmniVoice, removed 2026-11-26): the record and its recording"""
+    n = 0
+    for vid, v in worker.custom_voices().items():
+        if v.get("model", "holos") != "holos":
+            for ext in (".json", ".wav"):
+                try:
+                    os.remove(os.path.join(worker.CUSTOM_DIR, vid + ext))
+                except OSError:
+                    pass
+            n += 1
+    if n:
+        log.warning("removed %d custom voices of a retired model", n)
+    return n
+
+
 async def main() -> None:
     asyncio.create_task(_reaper())
+    drop_retired_voices()
     asyncio.get_running_loop().run_in_executor(None, lambda: (lambda n: n and log.warning(
         "freed %.2f GB of disabled models", n / 1e9))(drop_unused_models()))
     JOBS.start()

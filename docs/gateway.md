@@ -309,31 +309,23 @@ WeSpeaker on sherpa-onnx), `pyannote-community-1` (GPU).
 `disk_free_gb` (the Docker data disk), `slots` {`gpu`: 1 when a service uses the GPU, `cpu`: the connector's stream
 limit, 1 in economy mode}.
 
-## Models in speech requests; OmniVoice (since 0.17.0)
+## Models in speech requests (since 0.17.0)
 
 `POST /tts/v1/audio/speech` (and `/stream`, `/jobs`) take two more optional fields:
 
-- `model`: a model id from `/capabilities` `models` of kind tts (`holos`, `styletts2`, `omnivoice`): it picks the
-  engine. `multi` / `single` keep their old StyleTTS2 meaning; without `model` nothing changes.
+- `model`: a model id from `/capabilities` `models` of kind tts (`holos`, `styletts2`): it picks the engine.
+  `multi` / `single` keep their old StyleTTS2 meaning; without `model` nothing changes.
 - `settings`: the model's settings, by the JSON Schema in its `models` entry. Unknown keys or values out of range:
-  422. Holos and StyleTTS2 take none; OmniVoice takes `num_step` (4-64, 32), `guidance_scale` (0-5, 2.0),
-  `instructions` (voice design in English: «female, low pitch, british accent»), `seed` (-1 random; the same seed
-  gives the same audio) and `speed` (0.5-1.5, time-stretch; overrides the request's `speed`).
+  422. Holos and StyleTTS2 take none so far.
 
-`features` of the tts service has `model_settings` from this version on.
+`features` of the tts service has `model_settings` from this version on. Custom voices carry `model` (`holos`);
+`GET /tts/v1/voices/custom` lists it, `/capabilities` `services.tts.custom_voices` stays {id: sha256} and
+`custom_voice_models` adds {id: model}.
 
-OmniVoice runs only on GPU nodes: `COMPOSE_PROFILES=omnivoice` and `TTS_ENGINES=holos,omnivoice` in `.env` start
-`tts-omnivoice` (omnivoice.cpp, ~1.5 GB VRAM with Q8_0; `OMNIVOICE_QUANT=BF16` ~2.1 GB). Its weights are licensed
-CC-BY-NC-4.0 (non-commercial), the bundled codec under the Boson Higgs Audio 2 Community License
-(`services/tts-omnivoice/NOTICE`). OmniVoice reads plain text: numbers are spelled out by the verbalizer, `+`
-stress marks are dropped. Voices: `male`, `female` (voice design presets), `auto`, and custom voices.
-
-Custom voices belong to a model: `PUT /tts/v1/voices/custom/{id}` with `model: "omnivoice"`, `ref_audio` (base64
-of a 3-10 s recording, any format ffmpeg reads), `ref_text` (what it says), `sha256` (of the `ref_audio` bytes),
-`name`, `gender`, `consent_ref`. Without `model` it is a Holos voice (`vector`) as before. The node keeps the
-recording; tts-omnivoice keeps voices only in RAM, so node-tts registers a voice again when the server lost it.
-`GET /tts/v1/voices/custom` lists `model` with every voice; use `voice: "custom:<id>"` with the voice's model.
-`/capabilities` `services.tts.custom_voices` stays {id: sha256}; `custom_voice_models` adds {id: model}.
+OmniVoice (0.17.0-0.17.2, GPU, profile `omnivoice`) was removed in 0.18.0 (owner: poor Ukrainian voicing). The
+updater removes what a node still has: the `tts-omnivoice` container, the `omnivoice-models` volume, its image and
+`omnivoice` in `COMPOSE_PROFILES` / `TTS_ENGINES`; node-tts drops custom voices of that model. Its schema 1 fields
+simply stop appearing.
 
 ## Settings of STT and translation (since 0.17.2)
 
