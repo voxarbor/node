@@ -61,7 +61,11 @@ def _pyannote_turns(audio, num_speakers: int, min_speakers: int, max_speakers: i
             kw["min_speakers"] = min_speakers
         if max_speakers:
             kw["max_speakers"] = max_speakers
-    out = _pyannote_pipeline()({"waveform": torch.from_numpy(audio)[None], "sample_rate": SR}, **kw)
+    try:
+        out = _pyannote_pipeline()({"waveform": torch.from_numpy(audio)[None], "sample_rate": SR}, **kw)
+    finally:
+        if device() == "cuda":  # give the cached activations back: torch 2.11 kept ~4.1 GB until IDLE_TTL (2.8: ~2.6)
+            torch.cuda.empty_cache()
     ids: dict[str, int] = {}
     return [(s.start, s.end, ids.setdefault(lab, len(ids)))
             for s, _, lab in out.exclusive_speaker_diarization.itertracks(yield_label=True) if s.end - s.start > 0.05]
