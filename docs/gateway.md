@@ -309,6 +309,30 @@ WeSpeaker on sherpa-onnx), `pyannote-community-1` (GPU).
 `disk_free_gb` (the Docker data disk), `slots` {`gpu`: 1 when a service uses the GPU, `cpu`: the connector's stream
 limit, 1 in economy mode}.
 
+## Models in speech requests; OmniVoice (since 0.17.0)
+
+`POST /tts/v1/audio/speech` (and `/stream`, `/jobs`) take two more optional fields:
+
+- `model`: a model id from `/capabilities` `models` of kind tts (`holos`, `styletts2`, `omnivoice`): it picks the
+  engine. `multi` / `single` keep their old StyleTTS2 meaning; without `model` nothing changes.
+- `settings`: the model's settings, by the JSON Schema in its `models` entry. Unknown keys or values out of range:
+  422. Holos and StyleTTS2 take none; OmniVoice takes `num_step` (4-64, 32), `guidance_scale` (0-5, 2.0),
+  `instructions` (voice design in English: «female, low pitch, british accent») and `seed` (-1 random).
+
+`features` of the tts service has `model_settings` from this version on.
+
+OmniVoice runs only on GPU nodes: `COMPOSE_PROFILES=omnivoice` and `TTS_ENGINES=holos,omnivoice` in `.env` start
+`tts-omnivoice` (omnivoice.cpp, ~1.5 GB VRAM with Q8_0; `OMNIVOICE_QUANT=BF16` ~2.1 GB). Its weights are licensed
+CC-BY-NC-4.0 (non-commercial), the bundled codec under the Boson Higgs Audio 2 Community License
+(`services/tts-omnivoice/NOTICE`). OmniVoice reads plain text: numbers are spelled out by the verbalizer, `+`
+stress marks are dropped. Voices: `male`, `female` (voice design presets), `auto`, and custom voices.
+
+Custom voices belong to a model: `PUT /tts/v1/voices/custom/{id}` with `model: "omnivoice"`, `ref_audio` (base64
+of a 3-10 s recording, any format ffmpeg reads), `ref_text` (what it says), `sha256` (of the `ref_audio` bytes),
+`name`, `gender`, `consent_ref`. Without `model` it is a Holos voice (`vector`) as before. The node keeps the
+recording; tts-omnivoice keeps voices only in RAM, so node-tts registers a voice again when the server lost it.
+`GET /tts/v1/voices/custom` lists `model` with every voice; use `voice: "custom:<id>"` with the voice's model.
+
 ## Translation engine
 
 Since 0.16.4 the EN->UK model is our third fine-tune of Opus-MT en-zle (`model_revision` `opus-models-3`; 0.14.0: `opus-models-2`; NOTICE,

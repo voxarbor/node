@@ -178,7 +178,7 @@ def updater() -> dict:
 MAX_STREAMS = 1 if os.environ.get("NODE_MODE") == "gentle" else int(os.environ.get("CONNECT_MAX_STREAMS", "16"))
 NO_SETTINGS = {"type": "object", "properties": {}, "additionalProperties": False}
 # VRAM a model needs on a GPU, rough estimates (0 on CPU); not limits
-VRAM_GB = {"holos": 1.5, "styletts2": 1.5, "whisper": 2.0, "pyannote-community-1": 1.0}
+VRAM_GB = {"omnivoice": 2.0, "holos": 1.5, "styletts2": 1.5, "whisper": 2.0, "pyannote-community-1": 1.0}
 
 
 def _whisper_id(model: str) -> str:
@@ -212,6 +212,12 @@ def models(services: dict) -> list[dict]:
             add("holos", "tts", "holos", "tts", tts, at("patriotyk/HolosTTS", tts.get("model_revision")), "mit")
         if "styletts2" in engines:
             add("styletts2", "tts", "styletts2", "tts", tts, "patriotyk/styletts2-ukrainian", "mit")
+        ov = tts.get("omnivoice")
+        if "omnivoice" in engines and ov:
+            add("omnivoice", "tts", "omnivoice", "tts", dict(tts, available=ov.get("available"), healthy=True),
+                ov.get("revision"), ov.get("license", "cc-by-nc-4.0"), device=ov.get("device", "cuda"),
+                vram=VRAM_GB["omnivoice"])
+            out[-1]["settings"] = ov.get("settings") or NO_SETTINGS
     stt = services.get("stt") or {}
     if "available" in stt and stt.get("model"):
         add(_whisper_id(stt["model"]), "stt", "faster-whisper", "stt", stt, at(stt["model"], stt.get("model_revision")),
@@ -269,6 +275,8 @@ def capabilities() -> dict:
                                        if mi.get("stress") == "accentuk" else mi.get("stress")),
                          verbalizer=mi.get("verbalizer"))
                 s["features"] = h.get("features", [])
+                if h.get("omnivoice"):   # tts-omnivoice behind node-tts (GPU profile omnivoice)
+                    s["omnivoice"] = h["omnivoice"]
                 s["perf"] = h.get("perf")   # audio seconds synthesized per second of work, last hour
                 s.update(jobs=h.get("jobs"), **{k: v for k, v in st.get("tts", {}).items()})
                 try:  # lets a coordinator check cheaply that this node's stress lexicon matches its source

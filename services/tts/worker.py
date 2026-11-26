@@ -22,7 +22,12 @@ MODEL_REPOS = {
 HOLOS_DIR = os.environ.get("HOLOS_DIR", "/opt/holos")  # holos.pt, voices.pt, voices.json, voice_encoder.pt
 # Engines on offer: HolosTTS by default; StyleTTS2 is opt-in (its preset voices are named after real narrators:
 # check the rights before using them publicly). TTS_ENGINES="holos,styletts2" enables both.
-ENGINES = tuple(e for e in os.environ.get("TTS_ENGINES", "holos").replace(" ", "").split(",") if e in ("holos", "styletts2")) or ("holos",)
+# OmniVoice (GPU nodes, compose profile omnivoice): synthesis by the tts-omnivoice service (omnivoice.cpp tts-server),
+# enabled with TTS_ENGINES=holos,omnivoice and OMNIVOICE_URL. Weights CC-BY-NC-4.0 (NOTICE).
+OMNIVOICE_URL = os.environ.get("OMNIVOICE_URL", "").rstrip("/")
+OMNIVOICE_LANG = os.environ.get("OMNIVOICE_LANG", "Ukrainian")
+_KNOWN = ("holos", "styletts2") + (("omnivoice",) if OMNIVOICE_URL else ())
+ENGINES = tuple(e for e in os.environ.get("TTS_ENGINES", "holos").replace(" ", "").split(",") if e in _KNOWN) or ("holos",)
 DEFAULT_ENGINE = os.environ.get("TTS_DEFAULT_ENGINE", "holos")
 # Favorite voices per engine, in order (the first is the default): "alias=Voice;alias=Voice;...".
 # voice="male"/"male2"/"female"/... picks them; omitted = "male".
@@ -34,7 +39,20 @@ def _favorites(env: str, default: str) -> dict[str, str]:
 ALIASES = {
     "styletts2": _favorites("TTS_VOICES_STYLETTS2", "male=Денис Денисенко;male2=Матвій Ніколаєв;female=Марина Панас"),
     "holos": _favorites("TTS_VOICES_HOLOS", "male=Speaker_1;male2=Speaker_36;male3=Speaker_56;female=Speaker_12;female2=Speaker_30"),
+    "omnivoice": {"male": "male", "female": "female"},
 }
+# OmniVoice voices without a recording: "voice design" by attributes (its README: gender, age, pitch, ...); "auto"
+# lets the model pick. Custom voices (a 3-10 s recording + its text) are "custom:<id>" with model omnivoice.
+OMNI_DESIGN = {"male": "male, middle-aged, moderate pitch", "female": "female, young adult, moderate pitch", "auto": ""}
+# What /v1/audio/speech "settings" accepts for model omnivoice (JSON Schema, published in /capabilities models)
+OMNI_SETTINGS = {"type": "object", "additionalProperties": False, "properties": {
+    "num_step": {"type": "integer", "minimum": 4, "maximum": 64, "default": 32,
+                 "description": "MaskGIT steps: fewer is faster, more is cleaner"},
+    "guidance_scale": {"type": "number", "minimum": 0, "maximum": 5, "default": 2.0},
+    "instructions": {"type": "string", "maxLength": 300,
+                     "description": "voice design in English: gender, age, pitch, accent, whisper (comma-separated)"},
+    "seed": {"type": "integer", "minimum": -1, "maximum": 2147483647, "default": -1,
+             "description": "-1: random; the same seed gives the same audio"}}}
 STRESS = os.environ.get("TTS_STRESS", "accentuk")  # accentuk | word-stress
 ACCENTUK_MODE = os.environ.get("ACCENTUK_MODE", "light")  # light (CT2 INT8) | full (FP32 + spaCy TRF)
 VERBALIZER = os.environ.get("TTS_VERBALIZER", "accentuk")  # accentuk (span model) | m2m100 (seq2seq, slower)
@@ -66,6 +84,8 @@ def _holos_voice_names() -> tuple[str, ...]:
 
 def voice_names(engine: str = "styletts2") -> list[str]:
     """Preset voices, read from files only (no ML imports: the API process calls this)."""
+    if engine == "omnivoice":
+        return list(OMNI_DESIGN)
     if engine == "holos":
         return list(_holos_voice_names())
     return _uk_sorted(os.path.basename(p)[:-3] for p in glob.glob(os.path.join(VOICES_DIR, "*.pt")))
@@ -92,18 +112,27 @@ def custom_voices() -> dict[str, dict]:
 def custom_vector(voice_id: str) -> list[float]:
     try:
         return json.load(open(os.path.join(CUSTOM_DIR, f"{voice_id}.json"), encoding="utf-8"))["vector"]
-    except OSError:
+    except (OSError, KeyError):
         raise ValueError(f"unknown custom voice {voice_id!r}; see GET /v1/voices") from None
+
+
+def custom_model(voice_id: str) -> str | None:
+    """the model a custom voice belongs to: "holos" (a vector) or "omnivoice" (a recording); None if there is none"""
+    try:
+        return json.load(open(os.path.join(CUSTOM_DIR, f"{voice_id}.json"), encoding="utf-8")).get("model", "holos")
+    except (OSError, ValueError):
+        return None
 
 
 def resolve_voice(engine: str, voice: str | None) -> str:
     """None/"male"/"male2"/"female"/... -> the engine's favorites; "custom:<id>" (Holos); else a preset name."""
     voice = (voice or "male").strip()
     if voice.startswith("custom:"):
-        if engine != "holos":
-            raise ValueError("custom voices are Holos voices: use engine holos")
-        if not os.path.isfile(os.path.join(CUSTOM_DIR, f"{voice[7:]}.json")):
+        owner = custom_model(voice[7:])
+        if owner is None:
             raise ValueError(f"unknown custom voice {voice[7:]!r}; see GET /v1/voices")
+        if owner != engine:
+            raise ValueError(f"custom voice {voice[7:]!r} belongs to model {owner}: use model {owner}")
         return voice
     names = voice_names(engine)
     voice = ALIASES.get(engine, {}).get(voice.lower()) or voice
@@ -385,14 +414,92 @@ def _holos():
     return _holos_model
 
 
+def _omni_call(path: str, body: dict | None = None, method: str = "POST", timeout: float = 600) -> bytes:
+    import urllib.request
+
+    data = json.dumps(body).encode() if body is not None else None
+    req = urllib.request.Request(OMNIVOICE_URL + path, data, {"Content-Type": "application/json"}, method=method)
+    with urllib.request.urlopen(req, timeout=timeout) as r:
+        return r.read()
+
+
+def omni_register(voice_id: str) -> None:
+    """(Re)registers a custom OmniVoice voice on tts-omnivoice: its registry lives only in RAM (lost on a restart)."""
+    import base64
+
+    rec = json.load(open(os.path.join(CUSTOM_DIR, f"{voice_id}.json"), encoding="utf-8"))
+    wav = open(os.path.join(CUSTOM_DIR, f"{voice_id}.wav"), "rb").read()
+    _omni_call("/v1/audio/voices", {"name": voice_id, "ref_text": rec["ref_text"],
+                                    "wav_b64": base64.b64encode(wav).decode()}, timeout=120)
+
+
+def omni_unregister(voice_id: str) -> None:
+    import urllib.parse
+
+    try:
+        _omni_call(f"/v1/audio/voices/{urllib.parse.quote(voice_id)}", method="DELETE", timeout=10)
+    except Exception:
+        pass  # not registered (or the service is down): nothing to drop
+
+
+def _omni_speak(text: str, voice: str, settings: dict | None):
+    """One text piece through tts-omnivoice -> float32 mono PCM at 24 kHz."""
+    import io
+    import urllib.error
+
+    import numpy as np
+    import soundfile as sf
+
+    body = {"input": text, "language": OMNIVOICE_LANG, "response_format": "wav"}
+    name = voice[7:] if voice.startswith("custom:") else None
+    if name:
+        body["voice"] = name
+    elif OMNI_DESIGN.get(voice):
+        body["instructions"] = OMNI_DESIGN[voice]
+    for k, v in (settings or {}).items():
+        if k in OMNI_SETTINGS["properties"] and v not in (None, ""):
+            body[k] = v
+    for attempt in (1, 2):
+        try:
+            data = _omni_call("/v1/audio/speech", body)
+            break
+        except urllib.error.HTTPError as exc:
+            msg = exc.read().decode(errors="replace")
+            if name and attempt == 1 and exc.code == 400 and "unknown voice" in msg:
+                omni_register(name)  # tts-omnivoice restarted since: register again, then retry once
+                continue
+            raise RuntimeError(f"omnivoice: HTTP {exc.code}: {msg[:200]}") from None
+    audio, sr = sf.read(io.BytesIO(data), dtype="float32", always_2d=False)
+    if audio.ndim > 1:
+        audio = audio.mean(axis=1)
+    if sr != SAMPLE_RATE:
+        import librosa
+
+        audio = librosa.resample(audio, orig_sr=sr, target_sr=SAMPLE_RATE)
+    return np.asarray(audio, dtype=np.float32)
+
+
 def synthesize(text: str, voice: str | None, speed: float, model: str, pause_ms: int,
-               do_verbalize: bool, engine: str = "styletts2", use_lexicon: bool = True) -> tuple[bytes, dict]:
+               do_verbalize: bool, engine: str = "styletts2", use_lexicon: bool = True,
+               settings: dict | None = None) -> tuple[bytes, dict]:
     """Returns (float32 mono PCM at 24 kHz as bytes, info)."""
     import numpy as np
     from ipa_uk import ipa
 
     started = time.monotonic()
-    if engine == "holos":
+    omni = engine == "omnivoice"
+    if omni:  # no stress marks or IPA: OmniVoice reads plain text (numbers spelled out by the verbalizer)
+        voice = resolve_voice("omnivoice", voice)
+
+        def generate(ps):
+            wav = _omni_speak(ps, voice, settings)
+            if speed != 1.0 and len(wav):
+                import librosa
+
+                wav = librosa.effects.time_stretch(wav, rate=speed).astype(np.float32)
+            return wav
+        group = 10 ** 6  # one request per piece: the server splits long text itself
+    elif engine == "holos":
         holos, voice = _holos(), resolve_voice("holos", voice)
         generate = lambda ps: holos(ps, voice, speed)
         group = 100  # HolosTTS Space merges sentences up to 100 chars
@@ -427,8 +534,8 @@ def synthesize(text: str, voice: str | None, speed: float, model: str, pause_ms:
                 raise Cancelled("client gone")
             if not part.strip():
                 continue
-            stressed = _prepare(part, use_lexicon)
-            ps = ipa(stressed)
+            stressed = re.sub(r"\++", "", part) if omni else _prepare(part, use_lexicon)
+            ps = stressed.strip() if omni else ipa(stressed)
             if not ps:
                 continue
             wav = generate(ps)

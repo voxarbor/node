@@ -1,0 +1,65 @@
+diff -ru a/src/tts-server.h b/src/tts-server.h
+--- a/src/tts-server.h	2026-11-21 15:35:04.000000000 +0000
++++ b/src/tts-server.h	2026-11-26 05:32:50.253322505 +0000
+@@ -46,6 +46,11 @@
+     // random seed per request, matching the CLI convention; anything
+     // else forwards verbatim for reproducible output.
+     int64_t seed;
++
++    // Optional MaskGIT tuning (voxarbor patch): num_step <= 0 and a NaN
++    // guidance_scale keep the library defaults (32 steps, 2.0).
++    int   num_step       = 0;
++    float guidance_scale = NAN;
+ };
+ 
+ // One voice registration parsed from the POST /v1/audio/voices JSON body.
+@@ -174,6 +179,25 @@
+     }
+     req.seed = seed ? yyjson_get_sint(seed) : -1;
+ 
++    yyjson_val * num_step = yyjson_obj_get(root, "num_step");
++    if (num_step) {
++        if (!yyjson_is_int(num_step) || yyjson_get_sint(num_step) < 4 || yyjson_get_sint(num_step) > 64) {
++            err = "'num_step' must be an integer in [4, 64]";
++            yyjson_doc_free(doc);
++            return false;
++        }
++        req.num_step = (int) yyjson_get_sint(num_step);
++    }
++    yyjson_val * guidance = yyjson_obj_get(root, "guidance_scale");
++    if (guidance) {
++        if (!yyjson_is_num(guidance) || yyjson_get_num(guidance) < 0.0 || yyjson_get_num(guidance) > 5.0) {
++            err = "'guidance_scale' must be a number in [0, 5]";
++            yyjson_doc_free(doc);
++            return false;
++        }
++        req.guidance_scale = (float) yyjson_get_num(guidance);
++    }
++
+     yyjson_doc_free(doc);
+ 
+     if (req.format != "pcm" && req.format != "wav") {
+diff -ru a/tools/tts-server.cpp b/tools/tts-server.cpp
+--- a/tools/tts-server.cpp	2026-11-21 15:35:04.000000000 +0000
++++ b/tools/tts-server.cpp	2026-11-26 05:32:50.253725448 +0000
+@@ -14,6 +14,7 @@
+ #include "rvq-file.h"
+ #include "version.h"
+ 
++#include <cmath>
+ #include <cstdio>
+ #include <cstdlib>
+ #include <cstring>
+@@ -241,6 +242,12 @@
+         if (!req.instructions.empty()) {
+             p.instruct = req.instructions.c_str();
+         }
++        if (req.num_step > 0) {
++            p.mg_num_step = req.num_step;
++        }
++        if (!std::isnan(req.guidance_scale)) {
++            p.mg_guidance_scale = req.guidance_scale;
++        }
+ 
+         // Seed resolution mirrors the CLI: negative or absent draws a
+         // fresh hardware random seed, anything else lands verbatim on
