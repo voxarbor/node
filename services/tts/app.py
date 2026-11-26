@@ -457,9 +457,9 @@ def voices_info() -> dict:
                            "meta": voice_meta(engine, names), "markup": MARKUP}
     if "omnivoice" in engines:  # voice design presets; no stress marks or respelling (it reads plain text)
         engines["omnivoice"]["meta"] = {
-            "male": {"gender": "male", "label": "Чоловічий (опис голосу)"},
-            "female": {"gender": "female", "label": "Жіночий (опис голосу)"},
-            "auto": {"gender": "male", "label": "Автоматичний"}}
+            "male": {"gender": "male", "label": "Чоловічий"},
+            "female": {"gender": "female", "label": "Жіночий"},
+            "auto": {"gender": "male", "label": "Авто (за мовцем)"}}
         engines["omnivoice"]["markup"] = [m for m in MARKUP if m["id"] not in ("stress", "stress_long", "respell")]
         engines["omnivoice"]["settings"] = worker.OMNI_SETTINGS
     for vid, v in worker.custom_voices().items():  # custom voices after the presets of their model
