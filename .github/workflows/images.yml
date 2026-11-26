@@ -34,7 +34,7 @@ jobs:
           if changed base-av "$av"; then
             docker buildx build --push $lbl -t "$av" services/base-av; fi
           for v in cpu cu128; do
-            t=ghcr.io/voxarbor/node-base-torch:2.8.0-$v-$tv
+            t=ghcr.io/voxarbor/node-base-torch:2.11.0-$v-$tv
             if changed base-torch "$t" || changed base-av "$av"; then
               docker buildx build --push $lbl --build-arg BASE_AV="$av" --build-arg TORCH_VARIANT=$v -t "$t" services/base-torch; fi
           done
@@ -45,11 +45,11 @@ jobs:
       fail-fast: false
       matrix:
         include:  # image = what is pushed (node-<image>); args = extra build args
-          - { service: tts, image: tts, args: "BASE_IMAGE=ghcr.io/voxarbor/node-base-torch:2.8.0-cpu-1" }
-          - { service: tts, image: tts-cuda, args: "BASE_IMAGE=ghcr.io/voxarbor/node-base-torch:2.8.0-cu128-1" }   # GPU nodes
+          - { service: tts, image: tts, args: "BASE_IMAGE=ghcr.io/voxarbor/node-base-torch:2.11.0-cpu-1" }
+          - { service: tts, image: tts-cuda, args: "BASE_IMAGE=ghcr.io/voxarbor/node-base-torch:2.11.0-cu128-1" }   # GPU nodes
           - { service: translate, image: translate, args: "" }
           - { service: diarize, image: diarize, args: "BASE_IMAGE=ghcr.io/voxarbor/node-base-av:1" }
-          - { service: diarize, image: diarize-cuda, args: "BASE_IMAGE=ghcr.io/voxarbor/node-base-torch:2.8.0-cu128-1\nDIARIZE_VARIANT=cuda" }   # GPU: pyannote
+          - { service: diarize, image: diarize-cuda, args: "BASE_IMAGE=ghcr.io/voxarbor/node-base-torch:2.11.0-cu128-1\nDIARIZE_VARIANT=cuda" }   # GPU: pyannote
           - { service: tts-omnivoice, image: tts-omnivoice-cuda, args: "VARIANT=cuda" }   # GPU: OmniVoice (profile omnivoice)
           - { service: node-info, image: node-info, args: "" }
           - { service: fetch, image: fetch, args: "" }

@@ -3,4 +3,4 @@
 ARG BASE_AV=ghcr.io/voxarbor/node-base-av:1
 FROM ${BASE_AV}
 ARG TORCH_VARIANT=cpu
-RUN pip install --index-url https://download.pytorch.org/whl/${TORCH_VARIANT} torch==2.8.0 torchaudio==2.8.0
+RUN pip install --index-url https://download.pytorch.org/whl/${TORCH_VARIANT} torch==2.11.0 torchaudio==2.11.0
