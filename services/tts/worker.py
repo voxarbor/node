@@ -417,6 +417,10 @@ def _holos():
     return _holos_model
 
 
+class Unavailable(Exception):
+    """a backend service (tts-omnivoice) does not answer: the API maps it to 503"""
+
+
 def _omni_call(path: str, body: dict | None = None, method: str = "POST", timeout: float = 600) -> bytes:
     import urllib.request
 
@@ -462,16 +466,22 @@ def _omni_speak(text: str, voice: str, settings: dict | None):
     for k, v in (settings or {}).items():
         if k in OMNI_SERVER_KEYS and v not in (None, ""):
             body[k] = v
-    for attempt in (1, 2):
+    registered, deadline = False, time.monotonic() + 20  # a restarting tts-omnivoice answers within a few seconds
+    while True:
         try:
             data = _omni_call("/v1/audio/speech", body)
             break
         except urllib.error.HTTPError as exc:
             msg = exc.read().decode(errors="replace")
-            if name and attempt == 1 and exc.code == 400 and "unknown voice" in msg:
-                omni_register(name)  # tts-omnivoice restarted since: register again, then retry once
+            if name and not registered and exc.code == 400 and "unknown voice" in msg:
+                omni_register(name)  # tts-omnivoice restarted since: register the voice again, then retry once
+                registered = True
                 continue
             raise RuntimeError(f"omnivoice: HTTP {exc.code}: {msg[:200]}") from None
+        except (urllib.error.URLError, ConnectionError, TimeoutError) as exc:  # restarting (or down)
+            if time.monotonic() > deadline:
+                raise Unavailable(f"omnivoice service unavailable: {getattr(exc, 'reason', exc)}") from None
+            time.sleep(2)
     audio, sr = sf.read(io.BytesIO(data), dtype="float32", always_2d=False)
     if audio.ndim > 1:
         audio = audio.mean(axis=1)

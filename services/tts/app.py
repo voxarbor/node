@@ -8,6 +8,7 @@ import io
 import multiprocessing
 import os
 import secrets
+import shutil
 import subprocess
 import json
 import logging
@@ -89,6 +90,8 @@ async def run(fn, *args, request: Request | None = None):
                 waiter.add_done_callback(lambda f: f.cancelled() or f.exception())  # its Cancelled is expected
                 raise HTTPException(499, "client disconnected")
         return await waiter
+    except worker.Unavailable as exc:  # tts-omnivoice restarting or down
+        raise HTTPException(503, str(exc)) from None
     finally:
         _busy -= 1
         _last_used = time.monotonic()
@@ -563,7 +566,9 @@ async def _omni_reference(voice_id: str, req: CustomVoice) -> None:
         if os.path.getsize(wav) < 3 * 24000 * 2:
             raise HTTPException(422, "ref_audio: too short, give 3-10 s")
         os.makedirs(worker.CUSTOM_DIR, exist_ok=True)
-        os.replace(wav, os.path.join(worker.CUSTOM_DIR, f"{voice_id}.wav"))
+        dst = os.path.join(worker.CUSTOM_DIR, f"{voice_id}.wav")  # /tmp and the cache volume: other filesystems
+        shutil.copyfile(wav, dst + ".tmp")
+        os.replace(dst + ".tmp", dst)
 
 
 @app.put("/v1/voices/custom/{voice_id}", dependencies=[Depends(auth)])
@@ -596,7 +601,7 @@ async def voices_custom_put(voice_id: str, req: CustomVoice) -> dict:
     if req.model == "omnivoice":  # best effort now; a synthesis registers it again if tts-omnivoice lost it
         try:
             await asyncio.to_thread(worker.omni_register, voice_id)
-        except Exception as exc:
+        except Exception as exc:  # incl. a restarting tts-omnivoice: the voice is stored, synthesis registers it
             log.warning("omnivoice voice %s not registered yet: %s", voice_id, exc)
     return {"id": voice_id, "model": req.model, "voice": f"custom:{voice_id}", "sha256": req.sha256,
             "status": "replaced" if existed else "created"}
