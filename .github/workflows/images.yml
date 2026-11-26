@@ -28,7 +28,7 @@ jobs:
         run: |
           av=ghcr.io/voxarbor/node-base-av:$(cat services/base-av/VERSION)
           tv=$(cat services/base-torch/VERSION)
-          changed() { [ "${{ github.event_name }}" = workflow_dispatch ] || git diff --name-only HEAD~1 HEAD 2>/dev/null | grep -q "^services/$1/" \
+          changed() { git diff --name-only HEAD~1 HEAD 2>/dev/null | grep -q "^services/$1/" \
                       || ! docker manifest inspect "$2" >/dev/null 2>&1; }
           lbl="--label org.opencontainers.image.source=https://github.com/voxarbor/node"
           if changed base-av "$av"; then
@@ -76,16 +76,35 @@ jobs:
           if [ "${{ github.event_name }}" = workflow_dispatch ] || git diff --name-only HEAD~1 HEAD | grep -qx VERSION; then
             echo "release=v$(cat VERSION)" >> "$GITHUB_OUTPUT"; else echo "release=" >> "$GITHUB_OUTPUT"; fi
           echo "version=$v" >> "$GITHUB_OUTPUT"; echo "sha=$(git rev-parse --short=12 HEAD)" >> "$GITHUB_OUTPUT"
-      - name: free disk (the tts image is ~7 GB)
-        if: steps.changed.outputs.build && startsWith(matrix.image, 'tts')
-        run: sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL && df -h /
       - uses: docker/setup-buildx-action@v3
         if: steps.changed.outputs.build
       - uses: docker/login-action@v3
         if: steps.changed.outputs.build
         with: { registry: ghcr.io, username: "${{ github.actor }}", password: "${{ secrets.GITHUB_TOKEN }}" }
-      - uses: docker/build-push-action@v6
+      # an image whose sources did not change is not built again: its digest only gets the new tags. The key is the git
+      # tree of the service and of the base images plus the build args. Not for connector, node-info and updater: the
+      # release number is baked into them (they build in 1-2 min anyway).
+      - name: reuse an image built from the same sources
         if: steps.changed.outputs.build
+        id: reuse
+        run: |
+          img=ghcr.io/voxarbor/node-${{ matrix.image }}
+          key=$( { git rev-parse HEAD:services/${{ matrix.service }} HEAD:services/base-av HEAD:services/base-torch; \
+                   printf '%s' "${{ matrix.args }}"; } | sha256sum | cut -c1-16)
+          echo "src=$img:src-$key" >> "$GITHUB_OUTPUT"
+          case "${{ matrix.image }}" in connector|node-info|updater) exit 0;; esac
+          if docker buildx imagetools inspect "$img:src-$key" >/dev/null 2>&1; then
+            tags="-t $img:${{ steps.v.outputs.version }} -t $img:sha-${{ steps.v.outputs.sha }} -t $img:latest"
+            [ -n "${{ steps.v.outputs.release }}" ] && tags="$tags -t $img:${{ steps.v.outputs.release }}"
+            docker buildx imagetools create $tags "$img:src-$key"
+            echo "reused=true" >> "$GITHUB_OUTPUT"
+            echo "reused $img:src-$key"
+          fi
+      - name: free disk (the tts image is ~7 GB)
+        if: steps.changed.outputs.build && !steps.reuse.outputs.reused && startsWith(matrix.image, 'tts')
+        run: sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL && df -h /
+      - uses: docker/build-push-action@v6
+        if: steps.changed.outputs.build && !steps.reuse.outputs.reused
         with:
           context: services/${{ matrix.service }}
           push: true
@@ -94,6 +113,7 @@ jobs:
             ghcr.io/voxarbor/node-${{ matrix.image }}:sha-${{ steps.v.outputs.sha }}
             ghcr.io/voxarbor/node-${{ matrix.image }}:latest
             ${{ steps.v.outputs.release && format('ghcr.io/voxarbor/node-{0}:{1}', matrix.image, steps.v.outputs.release) || '' }}
+            ${{ steps.reuse.outputs.src }}
           secrets: |
             hf_token=${{ secrets.HF_TOKEN }}
           build-args: |
@@ -105,5 +125,6 @@ jobs:
             org.opencontainers.image.description=VoxArbor Node: self-hosted Ukrainian voice services (${{ matrix.image }})
             org.opencontainers.image.licenses=Apache-2.0
             org.opencontainers.image.version=${{ steps.v.outputs.release || format('sha-{0}', steps.v.outputs.sha) }}
-          cache-from: type=gha,scope=${{ matrix.image }}
-          cache-to: type=gha,scope=${{ matrix.image }},mode=max
+          # layer cache in the registry: the GitHub cache (10 GB) was evicted by the 7 GB tts images
+          cache-from: type=registry,ref=ghcr.io/voxarbor/node-${{ matrix.image }}:buildcache
+          cache-to: type=registry,ref=ghcr.io/voxarbor/node-${{ matrix.image }}:buildcache,mode=max,image-manifest=true,oci-mediatypes=true
