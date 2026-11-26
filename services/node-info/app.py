@@ -175,6 +175,82 @@ def updater() -> dict:
     return {"updater": {k: st.get(k) for k in keys}}
 
 
+MAX_STREAMS = 1 if os.environ.get("NODE_MODE") == "gentle" else int(os.environ.get("CONNECT_MAX_STREAMS", "16"))
+NO_SETTINGS = {"type": "object", "properties": {}, "additionalProperties": False}
+# VRAM a model needs on a GPU, rough estimates (0 on CPU); not limits
+VRAM_GB = {"holos": 1.5, "styletts2": 1.5, "whisper": 2.0, "pyannote-community-1": 1.0}
+
+
+def _whisper_id(model: str) -> str:
+    """deepdml/faster-whisper-large-v3-turbo-ct2 -> whisper-large-v3-turbo (the catalog id)"""
+    name = model.rsplit("/", 1)[-1].lower().replace("faster-whisper-", "whisper-")
+    for suffix in ("-ct2", "-int8"):
+        name = name.removesuffix(suffix)
+    return name if name.startswith("whisper-") else f"whisper-{name}"
+
+
+def models(services: dict) -> list[dict]:
+    """schema 1 addition (models system, node contract 2.1): one entry per model this node can run, built from the
+    service entries. Old coordinators ignore it; new ones read it instead of services.*.model."""
+    out = []
+
+    def add(mid, kind, engine, service, s, revision, license, device=None, vram=None):
+        device = device or s.get("device") or "cpu"
+        out.append({"id": mid, "kind": kind, "engine": engine, "revision": revision, "service": service,
+                    "device": device, "available": bool(s.get("available") and s.get("healthy")),
+                    "loaded": bool(s.get("loaded")), "busy": bool(s.get("busy")),
+                    "vram_gb": (vram if vram is not None else VRAM_GB.get(mid, 1.0)) if device == "cuda" else 0,
+                    "exclusive": False, "settings": NO_SETTINGS, "license": license})
+
+    def at(name, rev):
+        return f"{name}@{rev}" if name and rev else name
+
+    tts = services.get("tts") or {}
+    if "available" in tts:
+        engines = tts.get("engines") or {"holos": {}}
+        if "holos" in engines:
+            add("holos", "tts", "holos", "tts", tts, at("patriotyk/HolosTTS", tts.get("model_revision")), "mit")
+        if "styletts2" in engines:
+            add("styletts2", "tts", "styletts2", "tts", tts, "patriotyk/styletts2-ukrainian", "mit")
+    stt = services.get("stt") or {}
+    if "available" in stt and stt.get("model"):
+        add(_whisper_id(stt["model"]), "stt", "faster-whisper", "stt", stt, at(stt["model"], stt.get("model_revision")),
+            "mit", vram=VRAM_GB["whisper"])
+    tr = services.get("translate") or {}
+    if "available" in tr:  # translate and punctuation run on CPU on every node
+        add("opus-mt", "translate", "opus", "translate", tr, tr.get("model_revision") or "Helsinki-NLP/opus-mt",
+            "cc-by-4.0", device="cpu")
+        if tr.get("fallback_model"):
+            add("nllb-200", "translate", "nllb", "translate", tr, f"facebook/{tr['fallback_model']}", "cc-by-nc-4.0",
+                device="cpu")
+        add("punct-uk", "punctuate", "punct", "translate", tr,
+            at(tr.get("punctuation_model"), tr.get("punctuation_revision")), "apache-2.0", device="cpu")
+    di = services.get("diarize") or {}
+    if "available" in di:
+        engine = str(di.get("engine", "")).lower()
+        if "pyannote" in engine and "sherpa" not in engine:  # GPU image: pyannote community-1 on PyTorch
+            add("pyannote-community-1", "diarize", "pyannote", "diarize", di,
+                at("pyannote/speaker-diarization-community-1", di.get("model_revision")), "cc-by-4.0")
+        else:
+            add("sherpa-diarize", "diarize", "sherpa-onnx", "diarize", di,
+                "pyannote/segmentation-3.0 + wespeaker_en_voxceleb_resnet34_LM", "mit, apache-2.0")
+    return out
+
+
+def resources(node: dict) -> dict:
+    """schema 1 addition (node contract 2.1): free resources for the coordinator's scheduling; no identifiers"""
+    gpus = []
+    if node.get("vram_gb"):
+        gpus.append({"name": node.get("gpu_name"), "vram_gb": node["vram_gb"],
+                     "vram_free_gb": round(node["vram_gb"] - (node.get("vram_used_gb") or 0), 1)})
+    try:  # the container's root lives on the Docker data disk, where images, models and jobs go
+        disk_free = round(shutil.disk_usage("/").free / 1024 ** 3, 1)
+    except OSError:
+        disk_free = None
+    return {"gpus": gpus, "ram_gb": node.get("ram_total_gb"), "ram_free_gb": node.get("ram_available_gb"),
+            "disk_free_gb": disk_free, "slots": {"gpu": 1 if node.get("gpu_used") else 0, "cpu": MAX_STREAMS}}
+
+
 def capabilities() -> dict:
     services, st = {}, static_info()
     for name, url in SERVICES.items():
@@ -257,7 +333,7 @@ def capabilities() -> dict:
     return {"schema": 1, "product": "voxarbor-node", "product_version": VERSION,
             "voxarbor_node_version": VERSION, "voxarbor_node_tag": TAG or None, "voxarbor_node_release": RELEASE,
             "generated_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
-            "node": node, "services": services, **updater(),
+            "node": node, "services": services, "models": models(services), "resources": resources(node), **updater(),
             "gateway_paths": {k: f"/{k}/" for k in SERVICES}}
 
 

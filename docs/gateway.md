@@ -280,6 +280,35 @@ and `engine`. Per service:
 | diarize | `pyannote` or `sherpa-onnx` | community-1 / HF commit, or the two ONNX models / their sha256 prefixes | `gender_model` |
 | fetch | `yt-dlp` | yt-dlp + deno / yt-dlp version | `ytdlp_version`, `deno_version` |
 
+## Models and resources (since 0.17.0)
+
+Two schema 1 additions for the coordinator's model system; old coordinators ignore them, and a coordinator that finds
+no `models` builds the list from `services.*` as before.
+
+`models`: one entry per model the node can run, built from the service entries:
+
+| field | meaning |
+|---|---|
+| `id` | stable model id, the same as in the coordinator's catalog (below) |
+| `kind` | tts, stt, translate, punctuate, diarize (later video, image) |
+| `engine` | the node's engine name (for tts: as in `services.tts.engines`) |
+| `revision` | weights: repository and revision (`patriotyk/HolosTTS@5d40fbaa99e5`, `opus-models-3`) |
+| `service` | the gateway service that runs it |
+| `device` | cpu or cuda |
+| `available`, `loaded`, `busy` | from the service's `/health` |
+| `vram_gb` | rough VRAM need on a GPU, 0 on CPU |
+| `exclusive` | true: the whole GPU is taken while it runs (none of today's models) |
+| `settings` | JSON Schema of the settings the node accepts (empty for today's models) |
+| `license` | the weights' license id |
+
+Ids today: `holos`, `styletts2`, `whisper-<name>` (from `STT_MODEL`, e.g. `whisper-large-v3-turbo`), `opus-mt`,
+`nllb-200` (only with `TRANSLATE_NLLB=1`), `punct-uk`, `sherpa-diarize` (CPU: pyannote segmentation-3.0 +
+WeSpeaker on sherpa-onnx), `pyannote-community-1` (GPU).
+
+`resources`: `gpus` [{`name`, `vram_gb`, `vram_free_gb`}] (empty without an NVIDIA GPU), `ram_gb`, `ram_free_gb`,
+`disk_free_gb` (the Docker data disk), `slots` {`gpu`: 1 when a service uses the GPU, `cpu`: the connector's stream
+limit, 1 in economy mode}.
+
 ## Translation engine
 
 Since 0.16.4 the EN->UK model is our third fine-tune of Opus-MT en-zle (`model_revision` `opus-models-3`; 0.14.0: `opus-models-2`; NOTICE,
