@@ -27,7 +27,16 @@ const OUTPUT_TTL_S = Number(env.GEN_OUTPUT_TTL_S || 7200);
 const PROPS_MAX = 256 * 1024;
 const REMOTION = JSON.parse(fs.readFileSync(new URL("./node_modules/remotion/package.json", import.meta.url))).version;
 const VERSION = fs.readFileSync(new URL("./VERSION", import.meta.url), "utf8").trim();
-const CORES = os.cpus().length;
+const HOST_CORES = os.cpus().length;  // the whole machine: for "someone else loads it" (loadavg is host-wide)
+// cores this container may use: the cgroup CPU limit (compose deploy.resources.limits.cpus), as Remotion counts them
+function cgroupCores() {
+  try {
+    const [q, p] = fs.readFileSync("/sys/fs/cgroup/cpu.max", "utf8").trim().split(/\s+/);
+    if (q !== "max") return Math.max(1, Math.floor(Number(q) / Number(p)));
+  } catch { /* cgroup v1 or no limit */ }
+  return null;
+}
+const CORES = Math.min(os.availableParallelism ? os.availableParallelism() : HOST_CORES, cgroupCores() || Infinity);
 
 export const SETTINGS = {
   type: "object", additionalProperties: false, properties: {
@@ -76,7 +85,7 @@ function gpuUtil() {
 // someone else loads the machine (the owner at the PC): sampled only while gen itself is idle
 async function sampleLoad() {
   if (running) return;
-  const cpu = os.loadavg()[0] / CORES;
+  const cpu = os.loadavg()[0] / HOST_CORES;
   const gpu = DEVICE === "cuda" ? await gpuUtil() : null;
   const heavy = cpu > 0.7 || (gpu !== null && gpu > 40);
   if (!heavy) { load.busySince = null; load.external = false; return; }
@@ -276,7 +285,8 @@ async function work(job) {
   const file = path.join(OUT, `${job.id}.${part === "audio" ? "wav" : "mp4"}`);
   const req = { serveUrl: path.join(BUNDLES, job.input.sha256, meta.root), composition: s.composition, props: s.props || {},
                 part, frames: s.frames, codec: s.codec || "h264", crf: s.crf ?? 18, pix_fmt: s.pix_fmt || "yuv420p",
-                concurrency: s.concurrency || Math.max(1, Math.floor(CORES / 2)), gl: s.gl || GL_DEFAULT, output: file };
+                concurrency: Math.min(CORES, s.concurrency || Math.max(1, Math.floor(CORES / 2))),  // Remotion refuses more
+                gl: s.gl || GL_DEFAULT, output: file };
   job.status = "running";
   const t0 = now();
   const res = await new Promise((resolve) => {
@@ -378,7 +388,8 @@ async function health() {
            busy: Boolean(running) || Boolean(reason), busy_reason: running ? "rendering" : reason,
            paused: env.GEN_PAUSE === "1", running: running ? running.id : null, queued: queue.length,
            bundles: cachedBundles(), cache_gb: CACHE_GB, perf: fpsHour(), settings: SETTINGS, versions: [REMOTION],
-           cores: CORES, cpu_free_cores: Math.max(0, Math.round((CORES - os.loadavg()[0]) * 10) / 10) };
+           cores: CORES, host_cores: HOST_CORES,
+           cpu_free_cores: Math.max(0, Math.min(CORES, Math.round((HOST_CORES - os.loadavg()[0]) * 10) / 10)) };
 }
 
 const server = http.createServer(async (req, res) => {
@@ -422,4 +433,4 @@ setInterval(async () => {  // results the coordinator did not fetch and delete
   for (const j of [...jobs.values()]) if (j.ended && j.ended < cut) await drop(j);
 }, 300000);
 fs.rmSync(OUT, { recursive: true, force: true });  // parts of a previous run are of no use (the coordinator retries)
-server.listen(8000, "0.0.0.0", () => log(`gen ${VERSION}: remotion ${REMOTION}, ${DEVICE}, gl ${GL_DEFAULT}, ${CORES} cores`));
+server.listen(8000, "0.0.0.0", () => log(`gen ${VERSION}: remotion ${REMOTION}, ${DEVICE}, gl ${GL_DEFAULT}, ${CORES} of ${HOST_CORES} cores`));

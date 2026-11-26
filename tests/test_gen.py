@@ -129,8 +129,8 @@ try:
     print("info ok, bundle cached")
 
     # two video parts, then concat -c copy and ffprobe
-    for n, fr in ((1, [0, 59]), (2, [60, 119])):
-        assert call("POST", "/v1/jobs", job(f"r-1-{n}-1", part="video", frames=fr, crf=23))[0] == 202
+    for n, fr, conc in ((1, [0, 59], 0), (2, [60, 119], 64)):  # 64 > the container's 3 CPUs: clamped, not an error
+        assert call("POST", "/v1/jobs", job(f"r-1-{n}-1", part="video", frames=fr, crf=23, concurrency=conc))[0] == 202
     parts = []
     for n in (1, 2):
         j = wait(f"r-1-{n}-1")
