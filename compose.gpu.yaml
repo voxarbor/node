@@ -20,7 +20,7 @@ services:
 
   tts:
     <<: *gpu
-    image: ${REGISTRY:-ghcr.io/voxarbor}/node-tts-cuda:${VOXARBOR_NODE_TAG:-v0.16.5}
+    image: ${REGISTRY:-ghcr.io/voxarbor}/node-tts-cuda:${VOXARBOR_NODE_TAG:-v0.16.6}
     environment:
       TTS_DEVICE: cuda
       NVIDIA_VISIBLE_DEVICES: ${NODE_GPUS:-all}   # e.g. NODE_GPUS=0: only the first GPU
@@ -28,7 +28,7 @@ services:
 
   diarize:
     <<: *gpu
-    image: ${REGISTRY:-ghcr.io/voxarbor}/node-diarize-cuda:${VOXARBOR_NODE_TAG:-v0.16.5}
+    image: ${REGISTRY:-ghcr.io/voxarbor}/node-diarize-cuda:${VOXARBOR_NODE_TAG:-v0.16.6}
     environment:
       DIARIZE_ENGINE: pyannote   # community-1: better speaker counting; the CPU image keeps sherpa-onnx
       DIARIZE_DEVICE: cuda
@@ -45,5 +45,5 @@ services:
     environment:
       STT_DEVICE: cuda
       STT_IMAGE: ${STT_GPU_IMAGE:-ghcr.io/speaches-ai/speaches:0.8.3-cuda-12.6.3}
-      DIARIZE_IMAGE: ${REGISTRY:-ghcr.io/voxarbor}/node-diarize-cuda:${VOXARBOR_NODE_TAG:-v0.16.5}
-      TTS_IMAGE: ${REGISTRY:-ghcr.io/voxarbor}/node-tts-cuda:${VOXARBOR_NODE_TAG:-v0.16.5}
+      DIARIZE_IMAGE: ${REGISTRY:-ghcr.io/voxarbor}/node-diarize-cuda:${VOXARBOR_NODE_TAG:-v0.16.6}
+      TTS_IMAGE: ${REGISTRY:-ghcr.io/voxarbor}/node-tts-cuda:${VOXARBOR_NODE_TAG:-v0.16.6}
