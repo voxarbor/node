@@ -1,0 +1,11 @@
+{
+  "name": "voxarbor-node-gen-fixture",
+  "private": true,
+  "description": "Test composition for the /gen render tests (tests/test_gen.py)",
+  "dependencies": {
+    "@remotion/bundler": "4.0.545",
+    "remotion": "4.0.545",
+    "react": "19.2.0",
+    "react-dom": "19.2.0"
+  }
+}

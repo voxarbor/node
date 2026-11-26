@@ -26,6 +26,7 @@ SERVICES = {  # name -> base URL inside the node's compose network
     "translate": os.environ.get("TRANSLATE_URL", "http://translate:8000"),
     "diarize": os.environ.get("DIARIZE_URL", "http://diarize:8000"),
     "fetch": os.environ.get("FETCH_URL", "http://fetch:8000"),  # optional (compose profile fetch)
+    "gen": os.environ.get("GEN_URL", "http://gen:8000"),        # optional (compose profile gen): Remotion Render
 }
 IMAGES = {k: os.environ.get(f"{k.upper()}_IMAGE", "") for k in SERVICES}
 DEVICES = {k: os.environ.get(f"{k.upper()}_DEVICE", "") for k in SERVICES}  # set by compose.gpu.yaml for stt
@@ -252,6 +253,14 @@ def models(services: dict) -> list[dict]:
         else:
             add("sherpa-diarize", "diarize", "sherpa-onnx", "diarize", di,
                 "pyannote/segmentation-3.0 + wespeaker_en_voxceleb_resnet34_LM", "mit, apache-2.0")
+    ge = services.get("gen") or {}
+    if ge.get("remotion"):  # compose profile gen is on and the service answers
+        add("remotion", "render", "remotion", "gen", dict(ge, loaded=True), f"remotion@{ge['remotion']}", "remotion",
+            device=ge.get("device") or "cpu", vram=1.0)
+        out[-1].update(busy=bool(ge.get("busy")), paused=bool(ge.get("paused")), busy_reason=ge.get("busy_reason"),
+                       settings=ge.get("settings") or NO_SETTINGS, bundles=ge.get("bundles") or [],
+                       versions=ge.get("versions") or [ge["remotion"]], fps=(ge.get("perf") or {}).get("fps"),
+                       perf=ge.get("perf"), slots=ge.get("slots", 1))
     return out
 
 
@@ -266,7 +275,9 @@ def resources(node: dict) -> dict:
     except OSError:
         disk_free = None
     return {"gpus": gpus, "ram_gb": node.get("ram_total_gb"), "ram_free_gb": node.get("ram_available_gb"),
-            "disk_free_gb": disk_free, "slots": {"gpu": 1 if node.get("gpu_used") else 0, "cpu": MAX_STREAMS}}
+            "disk_free_gb": disk_free, "slots": {"gpu": 1 if node.get("gpu_used") else 0, "cpu": MAX_STREAMS},
+            "cpu_cores": node.get("cpu_cores"),   # cores not used now (cores minus the 1-minute load average)
+            "cpu_free_cores": round(max(0.0, (node.get("cpu_cores") or 0) - (node.get("load_avg") or [0])[0]), 1)}
 
 
 def capabilities() -> dict:
@@ -331,6 +342,13 @@ def capabilities() -> dict:
                 s.update(ytdlp_version=h.get("ytdlp_version"), deno_version=h.get("deno_version"),
                          last_bot_check=h.get("last_bot_check"), last_ok=h.get("last_ok"),
                          endpoints=["/v1/info", "/v1/subs", "/v1/audio", "/v1/list"])
+            elif name == "gen":
+                s.update({k: h.get(k) for k in ("remotion", "busy", "busy_reason", "paused", "running", "queued",
+                                                "bundles", "perf", "settings", "versions", "slots", "cores",
+                                                "cpu_free_cores")},
+                         engine="remotion", model=f"Remotion {h.get('remotion')} + Chrome Headless Shell",
+                         model_revision=h.get("remotion"), device=h.get("device") or "cpu",
+                         endpoints=["/v1/jobs", "/v1/files"])
             elif name == "diarize":
                 s.update(engine=h.get("engine", "sherpa-onnx"), gender_model=h.get("gender_model", "tts-voices-0"),
                          model=h.get("model") or "pyannote segmentation-3.0 + wespeaker_en_voxceleb_resnet34_LM (sherpa-onnx)",

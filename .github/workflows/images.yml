@@ -9,7 +9,7 @@ name: images
 on:
   push:
     branches: [main]
-    paths: ["services/base-av/**", "services/base-torch/**", "services/tts/**", "services/translate/**", "services/diarize/**", "services/node-info/**", "services/fetch/**", "services/tts-omnivoice/**", "services/connector/**", "services/updater/**", "VERSION", ".github/workflows/images.yml"]
+    paths: ["services/base-av/**", "services/base-torch/**", "services/tts/**", "services/translate/**", "services/diarize/**", "services/node-info/**", "services/fetch/**", "services/tts-omnivoice/**", "services/gen/**", "services/connector/**", "services/updater/**", "VERSION", ".github/workflows/images.yml"]
   workflow_dispatch:
 permissions:
   contents: read
@@ -51,6 +51,7 @@ jobs:
           - { service: diarize, image: diarize, args: "BASE_IMAGE=ghcr.io/voxarbor/node-base-av:1" }
           - { service: diarize, image: diarize-cuda, args: "BASE_IMAGE=ghcr.io/voxarbor/node-base-torch:2.11.0-cu128-1\nDIARIZE_VARIANT=cuda" }   # GPU: pyannote
           - { service: tts-omnivoice, image: tts-omnivoice-cuda, args: "VARIANT=cuda" }   # GPU: OmniVoice (profile omnivoice)
+          - { service: gen, image: gen, args: "" }   # optional: Remotion Render (profile gen)
           - { service: node-info, image: node-info, args: "" }
           - { service: fetch, image: fetch, args: "" }
           - { service: connector, image: connector, args: "" }

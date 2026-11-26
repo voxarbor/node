@@ -1,0 +1,12 @@
+{
+  "name": "voxarbor-node-gen",
+  "private": true,
+  "description": "VoxArbor Node /gen: Remotion render worker",
+  "type": "module",
+  "dependencies": {
+    "@remotion/renderer": "4.0.545",
+    "remotion": "4.0.545",
+    "react": "19.2.0",
+    "react-dom": "19.2.0"
+  }
+}

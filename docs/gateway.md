@@ -346,6 +346,38 @@ recording; tts-omnivoice keeps voices only in RAM, so node-tts registers a voice
   (1.0-1.5, default 1.1). Unknown keys or values out of range: 422. `/translate/health` publishes the schema.
 - **Punctuation** (`punct-uk`) has no settings.
 
+## Generation: /gen, Remotion Render (since 0.18.0)
+
+Optional service `gen` (compose profile `gen`, image `node-gen`: Node 22, Remotion 4.0.545, Chrome Headless Shell).
+Model `remotion` (kind `render`) renders one part of a Remotion composition per job. One job at a time.
+
+- `POST /gen/v1/jobs` `{id, model: "remotion", kind: "render", settings: {part: "video" | "audio" | "info",
+  composition, props (≤ 256 KB), frames: [from, to] (inclusive), codec: h264 | h265, crf 0-51, pix_fmt: yuv420p |
+  yuv444p, concurrency 0-64 (0: half the cores), gl: "" | swangle | angle | vulkan (GPU nodes) | egl,
+  remotion_version}, inputs: [{role: "bundle", sha256, mime, bytes}]}` → 202. The same `id` again is the same job.
+  Unknown keys, values out of range, another `remotion_version` → 422.
+- `GET /gen/v1/jobs/{id}` → `{status: queued | paused | fetching | running | done | error | canceled, progress,
+  frames_done, frames, eta_s, frames_total, error, error_code, busy_reason, outputs}`. `paused`: the part waits
+  because the node serves viewers or TTS, drains for an update, runs in economy mode, `GEN_PAUSE=1`, or the machine
+  is busy (CPU load > 70 % of the cores or GPU > 40 % for a minute while the node itself is idle). It is a live
+  state: the part starts when that ends. A started part is not interrupted.
+- outputs: video `[{sha256, mime: video/mp4, bytes, frames, seconds, frames_total, fps, width, height}]` (no audio,
+  every part a separate encode starting with a key frame, x264 preset medium); audio `audio/wav` (48 kHz) of
+  `frames` or of the whole composition; info `[{frames_total, fps, width, height, seconds}]` without rendering.
+  Errors: `frames_out_of_range` (with `frames_total`), `no_composition`, `unsupported_remotion_version`,
+  `input_unavailable`, `input_corrupt`, `disk_full`, `render_failed`.
+- `GET /gen/v1/files/{sha256}` (Range) → the part; kept until `DELETE /gen/v1/jobs/{id}` or 2 h.
+  `DELETE` also cancels a running part at once (the render process and its Chrome are killed).
+- Bundle: the archive (tar.gz or zip) of `remotion bundle` output with `package.json` or `package-lock.json`
+  inside (the remotion version). The node fetches it once from the coordinator (`GET /v1/nodes/media/{sha256}`
+  through the connector's internal `/media/{sha256}`: the node token stays in the connector), checks sha256,
+  unpacks it into the `gen-cache` volume: LRU up to `GEN_CACHE_GB` (20), refused when less than `GEN_MIN_FREE_GB`
+  (10) would stay free.
+- `/capabilities` `models[]` `remotion`: `busy`, `paused`, `busy_reason`, `bundles` (cached sha256), `versions`,
+  `fps` (frames per second of rendering, last hour), `perf`, `slots` 1, `settings` (JSON Schema). `resources` has
+  `cpu_cores` and `cpu_free_cores`.
+- An update drains the node as usual; a part still running then is cut by the restart (the coordinator retries it).
+
 ## Translation engine
 
 Since 0.16.4 the EN->UK model is our third fine-tune of Opus-MT en-zle (`model_revision` `opus-models-3`; 0.14.0: `opus-models-2`; NOTICE,

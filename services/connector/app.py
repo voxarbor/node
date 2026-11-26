@@ -12,6 +12,7 @@ import json
 import logging
 import os
 import random
+import re
 import secrets
 import ssl
 import struct
@@ -632,12 +633,49 @@ async def health(_: web.Request) -> web.Response:
                               "enrolled": os.path.isfile(STATE), "insecure_tls": INSECURE, **status})
 
 
+SHA_RE = re.compile(r"^[0-9a-f]{64}$")
+
+
+async def media(request: web.Request) -> web.StreamResponse:
+    """Internal bridge for node services (gen): GET /media/{sha256} -> the coordinator's GET /v1/nodes/media/{sha256}
+    with this node's token, streamed (Range passed through). The node token never leaves the connector; callers
+    authenticate with the node's own gateway token. The coordinator serves only inputs of jobs given to this node."""
+    if request.headers.get("Authorization") != f"Bearer {LOCAL_TOKEN}" or not LOCAL_TOKEN:
+        return web.json_response({"detail": "invalid token"}, status=401)
+    sha = request.match_info["sha"]
+    st = load(STATE) or {}
+    if not SHA_RE.fullmatch(sha):
+        return web.json_response({"detail": "sha256 expected"}, status=400)
+    if not COORDINATOR_URL or not st.get("node_token"):
+        return web.json_response({"detail": "not connected to a coordinator"}, status=503)
+    headers = {"Authorization": f"Bearer {st['node_token']}", "X-VoxArbor-Node-Protocol": str(PROTOCOL)}
+    if request.headers.get("Range"):
+        headers["Range"] = request.headers["Range"]
+    http = request.app["http"]
+    try:
+        async with http.get(f"{COORDINATOR_URL}/v1/nodes/media/{sha}", headers=headers, ssl=ssl_context(),
+                            timeout=aiohttp.ClientTimeout(total=None, sock_connect=15, sock_read=300)) as r:
+            resp = web.StreamResponse(status=r.status)
+            for h in ("Content-Type", "Content-Length", "Content-Range", "Accept-Ranges"):
+                if h in r.headers:
+                    resp.headers[h] = r.headers[h]
+            await resp.prepare(request)
+            async for chunk in r.content.iter_chunked(1 << 20):
+                await resp.write(chunk)
+            await resp.write_eof()
+            return resp
+    except (aiohttp.ClientError, OSError, asyncio.TimeoutError) as exc:
+        return web.json_response({"detail": f"coordinator: {type(exc).__name__}"}, status=502)
+
+
 async def main() -> None:
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
     if INSECURE:
         log.warning("CONNECT_INSECURE_TLS=1: the coordinator's certificate is NOT verified (tests only)")
     app = web.Application()
     app.router.add_get("/health", health)
+    app.router.add_get("/media/{sha}", media)
+    app["http"] = aiohttp.ClientSession()
     runner = web.AppRunner(app, access_log=None)
     await runner.setup()
     await web.TCPSite(runner, "0.0.0.0", 8000).start()

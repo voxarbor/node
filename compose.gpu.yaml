@@ -20,7 +20,7 @@ services:
 
   tts:
     <<: *gpu
-    image: ${REGISTRY:-ghcr.io/voxarbor}/node-tts-cuda:${VOXARBOR_NODE_TAG:-v0.17.2}
+    image: ${REGISTRY:-ghcr.io/voxarbor}/node-tts-cuda:${VOXARBOR_NODE_TAG:-v0.18.0}
     environment:
       TTS_DEVICE: cuda
       NVIDIA_VISIBLE_DEVICES: ${NODE_GPUS:-all}   # e.g. NODE_GPUS=0: only the first GPU
@@ -32,7 +32,7 @@ services:
 
   diarize:
     <<: *gpu
-    image: ${REGISTRY:-ghcr.io/voxarbor}/node-diarize-cuda:${VOXARBOR_NODE_TAG:-v0.17.2}
+    image: ${REGISTRY:-ghcr.io/voxarbor}/node-diarize-cuda:${VOXARBOR_NODE_TAG:-v0.18.0}
     environment:
       DIARIZE_ENGINE: pyannote   # community-1: better speaker counting; the CPU image keeps sherpa-onnx
       DIARIZE_DEVICE: cuda
@@ -50,8 +50,22 @@ services:
     environment:
       STT_DEVICE: cuda
       STT_IMAGE: ${STT_GPU_IMAGE:-ghcr.io/speaches-ai/speaches:0.8.3-cuda-12.6.3}
-      DIARIZE_IMAGE: ${REGISTRY:-ghcr.io/voxarbor}/node-diarize-cuda:${VOXARBOR_NODE_TAG:-v0.17.2}
-      TTS_IMAGE: ${REGISTRY:-ghcr.io/voxarbor}/node-tts-cuda:${VOXARBOR_NODE_TAG:-v0.17.2}
+      DIARIZE_IMAGE: ${REGISTRY:-ghcr.io/voxarbor}/node-diarize-cuda:${VOXARBOR_NODE_TAG:-v0.18.0}
+      TTS_IMAGE: ${REGISTRY:-ghcr.io/voxarbor}/node-tts-cuda:${VOXARBOR_NODE_TAG:-v0.18.0}
+
+  # Remotion Render on a GPU node: gl=vulkan by default (the NVIDIA Vulkan driver comes with "graphics")
+  gen:
+    image: ${REGISTRY:-ghcr.io/voxarbor}/node-gen:${VOXARBOR_NODE_TAG:-v0.18.0}
+    environment:
+      GEN_DEVICE: cuda
+      NVIDIA_VISIBLE_DEVICES: ${NODE_GPUS:-all}
+      NVIDIA_DRIVER_CAPABILITIES: graphics,compute,utility
+    deploy:
+      resources:
+        limits: { cpus: "${GEN_CPUS:-8}", memory: "${GEN_MEM:-8g}" }
+        reservations:
+          devices:
+            - { driver: nvidia, count: all, capabilities: [gpu, utility, compute, graphics] }
 
   # OmniVoice TTS (k2-fsa, weights CC-BY-NC-4.0: non-commercial; see services/tts-omnivoice/NOTICE), omnivoice.cpp
   # tts-server on the GPU, ~1.5 GB VRAM (Q8_0). Only inside the node network: node-tts is its only client. Weights
@@ -59,7 +73,7 @@ services:
   tts-omnivoice:
     <<: *gpu
     profiles: ["omnivoice"]
-    image: ${REGISTRY:-ghcr.io/voxarbor}/node-tts-omnivoice-cuda:${VOXARBOR_NODE_TAG:-v0.17.2}
+    image: ${REGISTRY:-ghcr.io/voxarbor}/node-tts-omnivoice-cuda:${VOXARBOR_NODE_TAG:-v0.18.0}
     restart: unless-stopped
     environment:
       OMNIVOICE_QUANT: ${OMNIVOICE_QUANT:-Q8_0}   # Q8_0 | BF16 (a bit cleaner, ~2.1 GB VRAM)
