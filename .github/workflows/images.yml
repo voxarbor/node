@@ -70,7 +70,10 @@ jobs:
         run: |
           s=${{ matrix.service }}
           v=$(cat services/$s/VERSION)
-          echo "release=v$(cat VERSION)" >> "$GITHUB_OUTPUT"
+          # v<VERSION> (what nodes pin) only for a release: a VERSION change or "Run workflow"; a plain push to main must
+          # not move the tag of the current release onto untested images
+          if [ "${{ github.event_name }}" = workflow_dispatch ] || git diff --name-only HEAD~1 HEAD | grep -qx VERSION; then
+            echo "release=v$(cat VERSION)" >> "$GITHUB_OUTPUT"; else echo "release=" >> "$GITHUB_OUTPUT"; fi
           echo "version=$v" >> "$GITHUB_OUTPUT"; echo "sha=$(git rev-parse --short=12 HEAD)" >> "$GITHUB_OUTPUT"
       - name: free disk (the tts image is ~7 GB)
         if: steps.changed.outputs.build && startsWith(matrix.image, 'tts')
@@ -89,17 +92,17 @@ jobs:
             ghcr.io/voxarbor/node-${{ matrix.image }}:${{ steps.v.outputs.version }}
             ghcr.io/voxarbor/node-${{ matrix.image }}:sha-${{ steps.v.outputs.sha }}
             ghcr.io/voxarbor/node-${{ matrix.image }}:latest
-            ghcr.io/voxarbor/node-${{ matrix.image }}:${{ steps.v.outputs.release }}
+            ${{ steps.v.outputs.release && format('ghcr.io/voxarbor/node-{0}:{1}', matrix.image, steps.v.outputs.release) || '' }}
           secrets: |
             hf_token=${{ secrets.HF_TOKEN }}
           build-args: |
-            VOXARBOR_NODE_RELEASE=${{ steps.v.outputs.release }}
+            VOXARBOR_NODE_RELEASE=${{ steps.v.outputs.release || format('sha-{0}', steps.v.outputs.sha) }}
             ${{ matrix.args }}
           labels: |
             org.opencontainers.image.source=https://github.com/voxarbor/node
             org.opencontainers.image.title=VoxArbor Node ${{ matrix.image }}
             org.opencontainers.image.description=VoxArbor Node: self-hosted Ukrainian voice services (${{ matrix.image }})
             org.opencontainers.image.licenses=Apache-2.0
-            org.opencontainers.image.version=${{ steps.v.outputs.release }}
+            org.opencontainers.image.version=${{ steps.v.outputs.release || format('sha-{0}', steps.v.outputs.sha) }}
           cache-from: type=gha,scope=${{ matrix.image }}
           cache-to: type=gha,scope=${{ matrix.image }},mode=max
