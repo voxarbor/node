@@ -92,7 +92,7 @@ PERF = _Perf()
 
 @app.get("/health")
 async def health() -> dict:
-    return {"status": "ok", "fallback_model": MODEL if worker.nllb_enabled() else None, "loaded": _pool is not None, "idle_ttl": IDLE_TTL,
+    return {"status": "ok", "settings": worker.SETTINGS, "fallback_model": MODEL if worker.nllb_enabled() else None, "loaded": _pool is not None, "idle_ttl": IDLE_TTL,
             "busy": _busy, "queue_max": QUEUE_MAX, "engine": "opus", "perf": PERF.summary(),
             "punctuation_model": "1-800-BAD-CODE/xlm-roberta_punctuation_fullstop_truecase",
             "punctuation_revision": "d1769a597ce8dfaa070d436bc67d4ee761f58884",  # = punct.REVISION (not imported here)
@@ -106,6 +106,21 @@ async def languages() -> dict:
     return {"languages": worker.LANGS, "note": "any FLORES-200 code (e.g. ukr_Cyrl) is accepted too"}
 
 
+def _settings(settings: dict | None) -> dict:
+    """settings against worker.SETTINGS: known keys only, types and ranges (422 otherwise)"""
+    props = worker.SETTINGS["properties"]
+    for k, v in (settings or {}).items():
+        spec = props.get(k)
+        if spec is None:
+            raise HTTPException(422, f"settings.{k}: not a translation setting ({sorted(props)})")
+        isnum = isinstance(v, (int, float)) and not isinstance(v, bool)
+        if not isnum or (spec["type"] == "integer" and not isinstance(v, int)):
+            raise HTTPException(422, f"settings.{k}: {spec['type']} expected")
+        if not spec["minimum"] <= v <= spec["maximum"]:
+            raise HTTPException(422, f"settings.{k}: {spec['minimum']}..{spec['maximum']}")
+    return settings or {}
+
+
 class TranslateRequest(BaseModel):
     text: str | None = None
     segments: list[str] | None = None
@@ -113,6 +128,8 @@ class TranslateRequest(BaseModel):
     target: str = "uk"
     beam_size: int = Field(2, ge=1, le=5)
     punctuate: bool = Field(False, description="Restore punctuation first (auto-captions, raw STT text)")
+    settings: dict | None = Field(None, description="the model's settings by the JSON Schema in /capabilities models "
+                                                     "(beam_size overrides the field above, max_length, repetition_penalty)")
 
     @model_validator(mode="after")
     def _one_input(self):
@@ -189,6 +206,7 @@ async def punctuate(req: PunctuateRequest, request: Request) -> dict:
 @app.post("/v1/translate", dependencies=[Depends(auth)])
 @app.post("/translate", dependencies=[Depends(auth)], include_in_schema=False)
 async def translate(req: TranslateRequest, request: Request) -> dict:
+    _settings(req.settings)  # before any work: a bad setting is a 422 at once
     started = time.monotonic()
     if req.punctuate:
         if req.segments is not None:
@@ -214,8 +232,10 @@ async def translate(req: TranslateRequest, request: Request) -> dict:
     else:
         try:
             t0 = time.monotonic()
-            translated, model = await _run(worker.translate, sentences, source, target, req.beam_size,
-                                            request=request)
+            st = _settings(req.settings)
+            translated, model = await _run(worker.translate, sentences, source, target,
+                                            st.get("beam_size", req.beam_size), st.get("max_length", worker.MAX_TOKENS),
+                                            st.get("repetition_penalty", 1.1), request=request)
             PERF.add(len(sentences), time.monotonic() - t0)
         except ValueError as exc:  # e.g. a pair that needs the opt-in NLLB
             raise HTTPException(422, str(exc))

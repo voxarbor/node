@@ -335,6 +335,17 @@ recording; tts-omnivoice keeps voices only in RAM, so node-tts registers a voice
 `GET /tts/v1/voices/custom` lists `model` with every voice; use `voice: "custom:<id>"` with the voice's model.
 `/capabilities` `services.tts.custom_voices` stays {id: sha256}; `custom_voice_models` adds {id: model}.
 
+## Settings of STT and translation (since 0.17.2)
+
+- **STT** (`whisper-*` in `models`): `vad_filter` (boolean, default true: silence and music are skipped),
+  `temperature` (0-1, default 0), `hotwords` (string up to 500 characters: names and game terms to prefer). They are
+  form fields of `POST /stt/v1/audio/transcriptions` with the same names (speaches 0.8.3). Not available per request
+  in speaches 0.8.3: `beam_size` (5) and the VAD silence parameters.
+- **Translation** (`opus-mt`, `nllb-200`): `POST /translate/v1/translate` takes `settings`: `beam_size` (1-5, default
+  2; overrides the top-level `beam_size`), `max_length` (16-400 tokens per sentence, default 400), `repetition_penalty`
+  (1.0-1.5, default 1.1). Unknown keys or values out of range: 422. `/translate/health` publishes the schema.
+- **Punctuation** (`punct-uk`) has no settings.
+
 ## Translation engine
 
 Since 0.16.4 the EN->UK model is our third fine-tune of Opus-MT en-zle (`model_revision` `opus-models-3`; 0.14.0: `opus-models-2`; NOTICE,

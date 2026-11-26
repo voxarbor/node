@@ -177,6 +177,15 @@ def updater() -> dict:
 
 MAX_STREAMS = 1 if os.environ.get("NODE_MODE") == "gentle" else int(os.environ.get("CONNECT_MAX_STREAMS", "16"))
 NO_SETTINGS = {"type": "object", "properties": {}, "additionalProperties": False}
+# STT (speaches 0.8.3): form fields of POST /stt/v1/audio/transcriptions the coordinator may set per request.
+# beam_size and VAD silence parameters are not per-request fields in speaches 0.8.3 (beam 5, its VAD defaults).
+STT_SETTINGS = {"type": "object", "additionalProperties": False, "properties": {
+    "vad_filter": {"type": "boolean", "default": True,
+                   "description": "skip silence and music before recognition (fewer made-up phrases)"},
+    "temperature": {"type": "number", "minimum": 0, "maximum": 1, "default": 0,
+                    "description": "0: the most likely text; higher: more varied, may help on hard audio"},
+    "hotwords": {"type": "string", "maxLength": 500,
+                 "description": "words to prefer (names, game terms), space-separated"}}}
 # VRAM a model needs on a GPU, rough estimates (0 on CPU); not limits
 VRAM_GB = {"omnivoice": 2.0, "holos": 1.5, "styletts2": 1.5, "whisper": 2.0, "pyannote-community-1": 1.0}
 
@@ -222,13 +231,16 @@ def models(services: dict) -> list[dict]:
     if "available" in stt and stt.get("model"):
         add(_whisper_id(stt["model"]), "stt", "faster-whisper", "stt", stt, at(stt["model"], stt.get("model_revision")),
             "mit", vram=VRAM_GB["whisper"])
+        out[-1]["settings"] = STT_SETTINGS
     tr = services.get("translate") or {}
     if "available" in tr:  # translate and punctuation run on CPU on every node
         add("opus-mt", "translate", "opus", "translate", tr, tr.get("model_revision") or "Helsinki-NLP/opus-mt",
             "cc-by-4.0", device="cpu")
+        out[-1]["settings"] = tr.get("settings") or NO_SETTINGS  # translate 0.4.7+: beam_size, max_length, ...
         if tr.get("fallback_model"):
             add("nllb-200", "translate", "nllb", "translate", tr, f"facebook/{tr['fallback_model']}", "cc-by-nc-4.0",
                 device="cpu")
+            out[-1]["settings"] = tr.get("settings") or NO_SETTINGS
         add("punct-uk", "punctuate", "punct", "translate", tr,
             at(tr.get("punctuation_model"), tr.get("punctuation_revision")), "apache-2.0", device="cpu")
     di = services.get("diarize") or {}
@@ -302,6 +314,8 @@ def capabilities() -> dict:
                 s.update(engine="opus", model="Helsinki-NLP Opus-MT tc-big (en-zle and other pairs -> uk), CTranslate2 int8",
                          model_revision=f"opus-models-{h.get('opus_models_version')}" if h.get("opus_models_version") else None,
                          punctuation_revision=(h.get("punctuation_revision") or "")[:12] or None)
+                if h.get("settings"):
+                    s["settings"] = h["settings"]   # translate 0.4.7+: the JSON Schema of "settings"
                 s.update(opus_pairs=h.get("opus_pairs"), opus_models_version=h.get("opus_models_version"), fallback_model=h.get("fallback_model"),
                          punctuation_model="1-800-BAD-CODE/xlm-roberta_punctuation_fullstop_truecase",
                          **st.get("translate", {}))

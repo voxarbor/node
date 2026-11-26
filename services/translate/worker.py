@@ -30,6 +30,14 @@ LANGS = {
 }
 ISO = {v: k for k, v in LANGS.items()}
 MAX_TOKENS = 400
+# what /v1/translate "settings" accepts (JSON Schema, published in /capabilities models for opus-mt and nllb-200)
+SETTINGS = {"type": "object", "additionalProperties": False, "properties": {
+    "beam_size": {"type": "integer", "minimum": 1, "maximum": 5, "default": 2,
+                  "description": "beam search width: wider is a little better and slower"},
+    "max_length": {"type": "integer", "minimum": 16, "maximum": MAX_TOKENS, "default": MAX_TOKENS,
+                   "description": "most tokens of one translated sentence (longer output is cut)"},
+    "repetition_penalty": {"type": "number", "minimum": 1.0, "maximum": 1.5, "default": 1.1,
+                           "description": "above 1 discourages repeated words"}}}
 PH = re.compile(r"\bN\d+\b")  # glossary placeholders in /translate input
 MAX_LOADED = int(os.environ.get("TRANSLATE_MAX_MODELS", "3"))
 THREADS = (lambda n: max(1, n // 2) if os.environ.get("NODE_MODE") == "gentle" else n)(int(os.environ.get("TRANSLATE_THREADS", "4")))  # NODE_MODE=gentle: half
@@ -119,22 +127,24 @@ def punctuate(text: str | None, segments: list[str] | None) -> list[str]:
     return punct.punctuate(text) if text is not None else punct.punctuate_segments(segments)
 
 
-def translate(texts: list[str], source: str, target: str, beam_size: int) -> tuple[list[str], str]:
+def translate(texts: list[str], source: str, target: str, beam_size: int, max_length: int = MAX_TOKENS,
+              repetition_penalty: float = 1.1) -> tuple[list[str], str]:
     """texts: non-empty sentences/segments, all in `source` (NLLB code). Returns (translations, model name)."""
     name = route(source, target)
     tr, encode, decode = _get(name)
     opus = name.startswith("opus:")
     batch = [encode(t) if opus else [source] + encode(t) for t in texts]
     results = tr.translate_batch(batch, target_prefix=None if opus else [[target]] * len(batch), beam_size=beam_size,
-                                 max_decoding_length=MAX_TOKENS, max_batch_size=16, repetition_penalty=1.1)
+                                 max_decoding_length=max_length, max_batch_size=16,
+                                 repetition_penalty=repetition_penalty)
     out = [decode([t for t in r.hypotheses[0] if t != target]).strip() for r in results]
     # placeholders (N0, N1 … = glossary terms the coordinator puts back) must survive exactly once: a sentence that
     # lost or doubled one gets a second, wider search; the first hypothesis that keeps them all wins
     bad = [i for i, (s, o) in enumerate(zip(texts, out)) if sorted(PH.findall(s)) != sorted(PH.findall(o))]
     if bad:
         again = tr.translate_batch([batch[i] for i in bad], target_prefix=None if opus else [[target]] * len(bad),
-                                   beam_size=6, num_hypotheses=6, max_decoding_length=MAX_TOKENS,
-                                   repetition_penalty=1.1)
+                                   beam_size=6, num_hypotheses=6, max_decoding_length=max_length,
+                                   repetition_penalty=repetition_penalty)
         for i, r in zip(bad, again):
             want = sorted(PH.findall(texts[i]))
             for hyp in r.hypotheses:
