@@ -274,7 +274,7 @@ def busy_streams():
     b = read_json(os.path.join(CTL, "busy.json"))
     if not b or time.time() - float(b.get("at", 0)) > 30:
         return None
-    return int(b.get("streams", 0))
+    return int(b.get("viewers", b.get("streams", 0)))  # connector 0.8.2+: viewer work only, not /gen or /capabilities
 
 
 def tts_idle():

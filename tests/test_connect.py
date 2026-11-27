@@ -164,6 +164,7 @@ async def main():
     gw.router.add_get("/gen/v1/jobs/{id}", gw_gen)
     gw.router.add_delete("/gen/v1/jobs/{id}", gw_gen)
     gw.router.add_get("/gen/v1/files/{sha}", gw_gen)
+    gw.router.add_get("/gen/v1/slow", gw_slow)
     co = Coord()
     ca = web.Application()
     ca.router.add_post("/v1/nodes/enroll", co.enroll)
@@ -177,7 +178,8 @@ async def main():
     os.makedirs(state, exist_ok=True)
     env = {**os.environ, "COORDINATOR_URL": f"http://127.0.0.1:{CO}", "GATEWAY_URL": f"http://127.0.0.1:{GW}",
            "API_KEY": "local", "NODE_JOIN_CODE": "join-ok", "NODE_NAME": "test-node", "CONNECT_STATE_DIR": state,
-           "CONNECT_MAX_STREAMS": "8"}
+           "CONNECT_MAX_STREAMS": "8", "UPDATER_CTL": "/tmp/cctl"}
+    os.makedirs("/tmp/cctl", exist_ok=True)
     proc = subprocess.Popen([sys.executable, "/app/app.py"], env=env)
     try:
         await asyncio.wait_for(co.connected.wait(), 30)
@@ -226,6 +228,24 @@ async def main():
             res, data = await co.wait(sid)
             assert res["status"] == code and json.loads(data) == {"method": method, "path": path}, (res, data)
         print("/gen forwarded (POST jobs, GET job, GET files, DELETE job)")
+
+        # busy.json: a live /gen request is a stream but not a viewer; a live /tts request is both
+        await co.req(40, "GET", "/gen/v1/slow", deadline_ms=12000)
+        await co.req(41, "GET", "/tts/v1/slow", deadline_ms=12000)
+        b = None
+        for _ in range(40):
+            await asyncio.sleep(0.25)
+            try:
+                b = json.load(open("/tmp/cctl/busy.json"))
+            except (OSError, ValueError):
+                continue
+            if b.get("streams") == 2:
+                break
+        assert b and b["streams"] == 2 and b["viewers"] == 1, b
+        for sid in (40, 41):
+            res, _ = await co.wait(sid, 20)
+            assert res["end"]["code"] == "deadline", res
+        print("busy.json: viewers count viewer work only, not /gen")
 
         await co.req(6, "GET", "/tts/v1/slow", deadline_ms=500)
         res, _ = await co.wait(6)

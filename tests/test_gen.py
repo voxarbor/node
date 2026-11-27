@@ -62,7 +62,7 @@ sh("docker", "run", "-d", "--name", "gentest-media", "--network", NET, "-v", f"{
 def start_gen(*extra):
     docker_rm("gentest-gen")
     sh("docker", "run", "-d", "--name", "gentest-gen", "--network", NET, "-p", f"127.0.0.1:{PORT}:8000",
-       "--cpus", "3", "--memory", "4g", "-e", f"API_KEY={KEY}", "-e", "GEN_MEDIA_URL=http://gentest-media:8000",
+       "--cpus", "3", "--cpu-shares", "128", "--memory", "4g", "-e", f"API_KEY={KEY}", "-e", "GEN_MEDIA_URL=http://gentest-media:8000",
        "-e", "TTS_URL=http://nowhere:1", "-v", f"{ctl}:/ctl:ro", *extra, IMAGE)
     for _ in range(60):
         try:
@@ -72,7 +72,19 @@ def start_gen(*extra):
     raise SystemExit(sh("docker", "logs", "gentest-gen"))
 
 
+LAT = []  # seconds per GET /v1/jobs/{id} while parts render
+
+
 def call(method, path, body=None):
+    t = time.time()
+    try:
+        return _call(method, path, body)
+    finally:
+        if method == "GET" and path.startswith("/v1/jobs/"):
+            LAT.append(time.time() - t)
+
+
+def _call(method, path, body=None):
     req = urllib.request.Request(f"http://127.0.0.1:{PORT}{path}", json.dumps(body).encode() if body is not None else None,
                                  {"Authorization": f"Bearer {KEY}", "Content-Type": "application/json"}, method=method)
     try:
@@ -148,7 +160,8 @@ try:
        "-select_streams v:0 -show_entries stream=nb_read_frames,width,height -of json /tmp/all.mp4 > /w/probe.json")
     pr = json.load(open(os.path.join(work, "probe.json")))["streams"][0]
     assert int(pr["nb_read_frames"]) == 120 and pr["width"] == 320, pr
-    print("video parts + concat ok (120 frames)")
+    print(f"video parts + concat ok (120 frames); GET /v1/jobs/<id> while rendering: max {max(LAT):.2f} s")
+    assert max(LAT) < 5, f"status requests blocked during a render: max {max(LAT):.1f} s"
 
     # audio of a range and of the whole composition (WAV)
     assert call("POST", "/v1/jobs", job("r-1-a-1", part="audio"))[0] == 202

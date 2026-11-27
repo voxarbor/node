@@ -351,7 +351,8 @@ Model `remotion` (kind `render`) renders one part of a Remotion composition per 
   Unknown keys, values out of range, another `remotion_version` → 422.
 - `GET /gen/v1/jobs/{id}` → `{status: queued | paused | fetching | running | done | error | canceled, progress,
   frames_done, frames, eta_s, frames_total, error, error_code, busy_reason, outputs}`. `paused`: the part waits
-  because the node serves viewers or TTS, drains for an update, runs in economy mode, `GEN_PAUSE=1`, or the machine
+  because the node serves viewers (connector `busy.json` `viewers`: live stt / tts / translate / diarize /
+  fetch requests; the coordinator's /gen requests and /capabilities do not count) or TTS, drains for an update, runs in economy mode, `GEN_PAUSE=1`, or the machine
   is busy (CPU load > 70 % of the cores or GPU > 40 % for a minute while the node itself is idle). It is a live
   state: the part starts when that ends. A started part is not interrupted.
 - outputs: video `[{sha256, mime: video/mp4, bytes, frames, seconds, frames_total, fps, width, height}]` (no audio,

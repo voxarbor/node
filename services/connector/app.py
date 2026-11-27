@@ -54,6 +54,7 @@ CAPS_EVERY = 30.0
 REQ_HEADERS = {"content-type", "accept", "last-event-id", "range", "x-request-id"}
 RES_HEADERS = {"content-type", "content-length", "content-disposition", "retry-after"}
 PATHS = ("/stt/", "/tts/", "/translate/", "/diarize/", "/fetch/", "/gen/")  # /gen: Remotion Render (0.18.0+)
+VIEWER_PATHS = ("/stt/", "/tts/", "/translate/", "/diarize/", "/fetch/")
 METHODS = {"GET", "POST", "PUT", "DELETE", "PATCH", "HEAD"}
 
 log = logging.getLogger("connector")
@@ -237,6 +238,8 @@ class Stream:
         self.closed = False
         self.idle = False
         self.last = time.monotonic()
+        self.viewer = False   # work for viewers (stt, tts, translate, diarize, fetch): what "busy" means for gen and
+                              # the updater's drain; the coordinator's /gen jobs and /capabilities are not
 
 
 class Link:
@@ -381,6 +384,7 @@ class Link:
         self.rr.append(sid)
         status["streams"] = len(self.streams)
         method, path = str(f.get("method", "")).upper(), str(f.get("path", ""))
+        s.viewer = path.startswith(VIEWER_PATHS)
         if len(self.streams) > self.max_streams:
             return self.fail(s, "too_many_streams", f"more than {self.max_streams} streams")
         if (updater_brief() or {}).get("state") == "draining":  # the node is about to update: send it elsewhere
@@ -437,6 +441,9 @@ class Link:
             self.fail(s, "upstream_unreachable", f"local gateway: {type(exc).__name__}")
         except ValueError as exc:
             self.fail(s, "bad_request", str(exc))
+        except Exception as exc:  # noqa: BLE001  anything else must still close the stream (it would stay counted)
+            log.warning("stream %s %s %s: %s", s.id, method, path[:60], exc)
+            self.fail(s, "internal", type(exc).__name__)
 
     async def forward(self, s: Stream, method: str, path: str, headers: dict, data) -> None:
         stt = path.startswith("/stt/") and "transcriptions" in path
@@ -501,8 +508,13 @@ class Link:
                 if now - s.last > IDLE_S and s.task and not s.idle:
                     s.idle = True
                     s.task.cancel()
+            for s in list(self.streams.values()):  # a stream whose request task ended without closing it
+                if s.task and s.task.done() and not s.closed:
+                    self.fail(s, "internal", "request ended without a response")
             if int(now) % 5 == 0:
-                ctl_write("busy.json", {"streams": len(self.streams), "at": time.time()})
+                # viewers: live requests of viewer work only (not /gen, not /capabilities, not ended tasks)
+                viewers = sum(1 for s in self.streams.values() if s.viewer and s.task and not s.task.done())
+                ctl_write("busy.json", {"streams": len(self.streams), "viewers": viewers, "at": time.time()})
             if int(now) % 5 == 0 and (self.caps_task is None or self.caps_task.done()):
                 # its own task: a slow local /capabilities (up to 15 s) must not hold back the pings
                 self.caps_task = asyncio.create_task(self.send_caps())

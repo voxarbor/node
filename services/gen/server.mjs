@@ -100,7 +100,8 @@ async function busyReason() {
   if (env.GEN_PAUSE === "1") return "paused (GEN_PAUSE=1)";
   if (env.NODE_MODE === "gentle") return "economy mode";
   const b = readJSON(path.join(CTL, "busy.json"));
-  if (b && b.streams > 0 && now() - (b.at || 0) < 30) return "serving viewers";
+  // connector 0.8.2+: "viewers" = live requests of viewer work (not the coordinator's /gen polling, not /capabilities)
+  if (b && (b.viewers ?? b.streams) > 0 && now() - (b.at || 0) < 30) return "serving viewers";
   const st = readJSON(path.join(CTL, "status.json"));
   if (st && st.state === "draining") return "draining for an update";
   if (await ttsBusy()) return "voicing";
