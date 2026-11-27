@@ -345,7 +345,8 @@ Model `remotion` (kind `render`) renders one part of a Remotion composition per 
 
 - `POST /gen/v1/jobs` `{id, model: "remotion", kind: "render", settings: {part: "video" | "audio" | "info",
   composition, props (≤ 256 KB), frames: [from, to] (inclusive), codec: h264 | h265, crf 0-51, pix_fmt: yuv420p |
-  yuv444p, concurrency 0-64 (0: half the container's cores; more is clamped to them), gl: "" (swangle) | swangle |
+  yuv444p, concurrency 0-64 (0: the container's cores, at most one per GB of 3/4 of its memory; more is clamped to the
+  cores), gl: "" (swangle) | swangle |
   angle | vulkan (GPU nodes only; not working under WSL) | egl,
   remotion_version}, inputs: [{role: "bundle", sha256, mime, bytes}]}` → 202. The same `id` again is the same job.
   Unknown keys, values out of range, another `remotion_version` → 422.
@@ -370,6 +371,9 @@ Model `remotion` (kind `render`) renders one part of a Remotion composition per 
 - `/capabilities` `models[]` `remotion`: `busy`, `paused`, `busy_reason`, `bundles` (cached sha256), `versions`,
   `fps` (frames per second of rendering, last hour), `perf`, `slots` 1, `settings` (JSON Schema). `resources` has
   `cpu_cores` and `cpu_free_cores`.
+- Limits (since 0.18.6): none by default: `GEN_CPUS` 0 (all cores) and `GEN_MEM` 0 (no limit), `cpu_shares` 128 so
+  that every other service of the node wins when the CPU is contended. `health` shows `cores`, `memory_gb` and
+  `concurrency_default`. Set `GEN_CPUS` / `GEN_MEM` in `.env` to cap it.
 - An update drains the node as usual; a part still running then is cut by the restart (the coordinator retries it).
 
 ## Translation engine

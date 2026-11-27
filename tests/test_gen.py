@@ -59,10 +59,10 @@ sh("docker", "run", "-d", "--name", "gentest-media", "--network", NET, "-v", f"{
    "python", "-m", "http.server", "8000", "-d", "/m")
 
 
-def start_gen(*extra):
+def start_gen(*extra, limits=("--cpus", "3", "--memory", "4g")):
     docker_rm("gentest-gen")
     sh("docker", "run", "-d", "--name", "gentest-gen", "--network", NET, "-p", f"127.0.0.1:{PORT}:8000",
-       "--cpus", "3", "--cpu-shares", "128", "--memory", "4g", "-e", f"API_KEY={KEY}", "-e", "GEN_MEDIA_URL=http://gentest-media:8000",
+       *limits, "--cpu-shares", "128", "-e", f"API_KEY={KEY}", "-e", "GEN_MEDIA_URL=http://gentest-media:8000",
        "-e", "TTS_URL=http://nowhere:1", "-v", f"{ctl}:/ctl:ro", *extra, IMAGE)
     for _ in range(60):
         try:
@@ -139,6 +139,20 @@ try:
     assert j["outputs"][0]["frames_total"] == 120 and j["outputs"][0]["fps"] == 30, j
     assert json.load(urllib.request.urlopen(f"http://127.0.0.1:{PORT}/health"))["bundles"] == [SHA]
     print("info ok, bundle cached")
+
+    # retry ids of the coordinator (2026-11-28): render r-<job>-<part>-<try>-a<k>, generation g-<id>-<k>; each is a
+    # job of its own (not the earlier attempt's state); the longest allowed id is 100 characters
+    long_id = "r-" + "9" * 90 + "-1-1-a12"
+    long_id = long_id[:100]
+    for jid in ("r-1-0-1-a1", "r-1-0-1-a2", "g-77-1", long_id):
+        assert call("POST", "/v1/jobs", job(jid, part="info"))[0] == 202, jid
+        j = wait(jid)
+        assert j["id"] == jid and j["status"] == "done" and j["outputs"][0]["frames_total"] == 120, j
+        st, b = call("DELETE", f"/v1/jobs/{jid}")
+        assert st == 200, (jid, st, b)
+    st, b = call("POST", "/v1/jobs", job("r-" + "9" * 100, part="info"))
+    assert st == 422 and b"id:" in b, (st, b)
+    print("retry ids (r-…-a<k>, g-…-<k>, 100 characters) ok")
 
     # two video parts, then concat -c copy and ffprobe
     for n, fr, conc in ((1, [0, 59], 0), (2, [60, 119], 64)):  # 64 > the container's 3 CPUs: clamped, not an error
@@ -229,6 +243,26 @@ try:
     h = start_gen("-e", "GEN_PAUSE=1")
     assert h["paused"] and h["busy"] and h["bundles"] == [], h  # a new container without the cache volume
     print("GEN_PAUSE ok")
+
+    # defaults without caps (0.18.6): cores from the machine, concurrency also bounded by RAM; and the compose file
+    # gives gen cpu_shares 128 and no cpu / memory limit unless GEN_CPUS / GEN_MEM are set
+    h = start_gen(limits=())
+    nproc = int(sh("docker", "run", "--rm", "alpine:3.20", "nproc").strip())
+    ram = int(sh("docker", "run", "--rm", "alpine:3.20", "sh", "-c", "awk '/MemTotal/ {print $2}' /proc/meminfo")) * 1024
+    assert h["cores"] == nproc, (h["cores"], nproc)
+    assert h["concurrency_default"] == max(1, min(nproc, int(ram * 0.75 // 1e9))), (h["concurrency_default"], nproc, ram)
+    h = start_gen(limits=("--cpus", "3", "--memory", "4g"))
+    assert h["cores"] == 3 and h["concurrency_default"] == 3 and abs(h["memory_gb"] - 4.3) < 0.1, h
+    root = os.path.dirname(HERE)
+    env = dict(os.environ, NODE_TOKEN="x", COMPOSE_PROFILES="gen")
+    for k in ("GEN_CPUS", "GEN_MEM"):
+        env.pop(k, None)
+    for files in (["compose.yaml"], ["compose.yaml", "compose.gpu.yaml"]):
+        cfg = json.loads(sh("docker", "compose", *[a for f in files for a in ("-f", os.path.join(root, f))],
+                            "--project-directory", root, "config", "--format", "json", env=env))["services"]["gen"]
+        lim = cfg["deploy"]["resources"]["limits"]
+        assert cfg["cpu_shares"] == 128 and float(lim.get("cpus", 0)) == 0 and int(lim.get("memory", 0)) == 0, (files, cfg)
+    print("defaults: all cores, RAM-bound concurrency, cpu_shares 128, no compose caps ok")
     print("GEN OK")
 except BaseException:
     print(subprocess.run(["docker", "logs", "--tail", "40", "gentest-gen"], capture_output=True, text=True).stdout[-4000:])

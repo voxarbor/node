@@ -39,6 +39,14 @@ function cgroupCores() {
   return null;
 }
 const CORES = Math.min(os.availableParallelism ? os.availableParallelism() : HOST_CORES, cgroupCores() || Infinity);
+// memory this container may use: its cgroup limit, else the node's RAM (no limit by default since 0.18.6)
+function memBytes() {
+  try { const m = fs.readFileSync("/sys/fs/cgroup/memory.max", "utf8").trim(); if (m !== "max") return Number(m); } catch { /* v1 */ }
+  return os.totalmem();
+}
+// default render threads: all cores, but at most one per GB of 3/4 of the memory (a Chrome tab of a 1080p render
+// takes ~0.5-1 GB), so an uncapped gen does not push the node into swap
+const CONCURRENCY = Math.max(1, Math.min(CORES, Math.floor((memBytes() * 0.75) / 1e9)));
 
 export const SETTINGS = {
   type: "object", additionalProperties: false, properties: {
@@ -320,7 +328,7 @@ async function work(job) {
   const file = path.join(OUT, `${job.id}.${part === "audio" ? "wav" : "mp4"}`);
   const req = { serveUrl: path.join(BUNDLES, job.input.sha256, meta.root), composition: s.composition, props: s.props || {},
                 part, frames: s.frames, codec: s.codec || "h264", crf: s.crf ?? 18, pix_fmt: s.pix_fmt || "yuv420p",
-                concurrency: Math.min(CORES, s.concurrency || Math.max(1, Math.floor(CORES / 2))),  // Remotion refuses more
+                concurrency: Math.min(CORES, s.concurrency || CONCURRENCY),  // Remotion refuses more than CORES
                 gl: s.gl || GL_DEFAULT, output: file };
   job.status = "running";
   const t0 = now();
@@ -424,7 +432,8 @@ async function health() {
            busy: Boolean(running) || Boolean(reason), busy_reason: running ? "rendering" : reason,
            paused: env.GEN_PAUSE === "1", running: running ? running.id : null, queued: queue.length,
            bundles: cachedBundles(), cache_gb: CACHE_GB, perf: fpsHour(), settings: SETTINGS, versions: [REMOTION],
-           cores: CORES, host_cores: HOST_CORES,
+           cores: CORES, host_cores: HOST_CORES, concurrency_default: CONCURRENCY,
+           memory_gb: Math.round(memBytes() / 1e8) / 10,
            cpu_free_cores: Math.max(0, Math.min(CORES, Math.round((HOST_CORES - os.loadavg()[0]) * 10) / 10)) };
 }
 
@@ -481,4 +490,4 @@ setInterval(async () => {  // results the coordinator did not fetch and delete
   for (const j of [...jobs.values()]) if (j.ended && j.ended < cut) await drop(j);
 }, 300000);
 fs.rmSync(OUT, { recursive: true, force: true });  // parts of a previous run are of no use (the coordinator retries)
-server.listen(8000, "0.0.0.0", () => log(`gen ${VERSION}: remotion ${REMOTION}, ${DEVICE}, gl ${GL_DEFAULT}, ${CORES} of ${HOST_CORES} cores`));
+server.listen(8000, "0.0.0.0", () => log(`gen ${VERSION}: remotion ${REMOTION}, ${DEVICE}, gl ${GL_DEFAULT}, ${CORES} of ${HOST_CORES} cores, ${(memBytes() / 1e9).toFixed(1)} GB, ${CONCURRENCY} render threads by default`));
