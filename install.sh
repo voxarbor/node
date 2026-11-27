@@ -77,17 +77,28 @@ docker_cmd() {  # prints "docker" or "sudo docker": whichever may talk to the Do
 
 # ---------- uninstall: the whole node goes, nothing else on the PC is touched ----------
 if [ -n "$UNINSTALL" ]; then
+  # the real folder (symlinks and trailing slashes resolved), at least two levels deep, not $HOME, and it must hold a
+  # VoxArbor node (compose.yaml of project voxarbor-node or a .env with VOXARBOR_NODE_TAG): checked before anything
+  REAL=$(cd "$DIR" 2>/dev/null && pwd -P) || die "немає теки вузла $DIR"
+  HOMEREAL=$(cd "$HOME" 2>/dev/null && pwd -P || echo "$HOME")
+  case "$REAL" in /*/*) ;; *) die "дивна тека вузла: $REAL, не видаляю" ;; esac
+  [ "$REAL" != "$HOMEREAL" ] || die "тека вузла — домашня тека ($REAL), не видаляю"
+  grep -qx 'name: voxarbor-node' "$REAL/compose.yaml" 2>/dev/null || grep -q '^VOXARBOR_NODE_TAG=' "$REAL/.env" 2>/dev/null \
+    || die "у $REAL немає вузла VoxArbor (compose.yaml проєкту voxarbor-node або .env), не видаляю"
+  if [ -n "$DRY" ]; then
+    say "сухий прогін: видалив би контейнери, томи й образи проєкту voxarbor-node і теку $REAL"
+    exit 0
+  fi
   DOCKER=$(docker_cmd) || die "docker не запущений або немає прав"
-  say "видаляю вузол: контейнери й томи проєкту voxarbor-node, його образи і теку $DIR"
+  say "видаляю вузол: контейнери й томи проєкту voxarbor-node, його образи і теку $REAL"
   if [ -z "$YES" ]; then
     printf 'Продовжити? Введіть yes: '; read -r answer </dev/tty || answer=""
     [ "$answer" = yes ] || die "скасовано"
   fi
-  if [ -f "$DIR/compose.yaml" ]; then
-    (cd "$DIR" && $DOCKER compose --env-file .env down -v --rmi all --remove-orphans </dev/null) || true
+  if [ -f "$REAL/compose.yaml" ]; then
+    (cd "$REAL" && $DOCKER compose --env-file .env down -v --rmi all --remove-orphans </dev/null) || true
   fi
-  case "$DIR" in /|"$HOME"|"") die "дивна тека вузла: $DIR, не видаляю" ;; esac
-  $SUDO rm -rf "$DIR"
+  $SUDO rm -rf "$REAL"
   say "готово. Docker лишився встановленим"
   exit 0
 fi
@@ -111,7 +122,12 @@ case ",$WANT," in *",fetch,"*) FETCH=1; SERVICES="$SERVICES,fetch" ;; esac
 case "$GPU_MODE" in auto|off) ;; *) die "--gpu: auto або off" ;; esac
 case "$MODE" in normal|gentle) ;; *) die "--mode: normal або gentle" ;; esac
 COORD="${COORD%/}"
-case "$COORD" in https://*|http://*) ;; *) die "потрібна адреса координатора: --coordinator https://…" ;; esac
+case "$COORD" in
+  https://?*) ;;
+  http://localhost|http://localhost[:/]*|http://127.0.0.1|http://127.0.0.1[:/]*|http://\[::1\]*) ;;  # tests on this PC
+  http://*) die "координатор лише через https:// (код приєднання й токен не можна слати відкритим текстом)" ;;
+  *) die "потрібна адреса координатора: --coordinator https://…" ;;
+esac
 [ -n "$JOIN" ] || die "потрібен код приєднання: --join <код> (сайт координатора, «Мої вузли»)"
 case "$JOIN" in *[!A-Za-z0-9_-]*) die "код приєднання: лише літери, цифри, - і _" ;; esac
 NAME=$(printf '%s' "${NAME:-$(hostname 2>/dev/null || true)}" | tr -cd 'A-Za-z0-9._-' | cut -c1-40)
@@ -174,12 +190,15 @@ for f in $FILES; do   # each file must match its line in the signed SHA256SUMS
   grep -q "^$(sha256sum "$f" | cut -d' ' -f1)  $f\$" SHA256SUMS || die "$f: контрольна сума не збігається"
 done
 chmod 755 prune.sh
+chmod 644 compose.yaml Caddyfile env.example SHA256SUMS manifest.json; [ -z "$GPU" ] || chmod 644 compose.gpu.yaml
 
 # ---------- 5. .env: settings of this node (mode 600, the token never leaves this PC) ----------
+umask 077   # from here on files are private to this user: .env holds the node token (also while it is rewritten)
 [ -f .env ] || cp env.example .env
+chmod 600 .env
 N=$(nproc 2>/dev/null || echo 4); half=$((N / 2)); [ "$half" -ge 2 ] || half=2; quarter=$((N / 4)); [ "$quarter" -ge 1 ] || quarter=1
 TOKEN=$(sed -n 's/^NODE_TOKEN=\([0-9a-f]\{32,\}\)$/\1/p' .env); [ -n "$TOKEN" ] || TOKEN=$(od -An -N32 -tx1 /dev/urandom | tr -d ' \n')
-setenv() {  # KEY VALUE: replace or add one line
+setenv() {  # KEY VALUE: replace or add one line; .env.new is created 0600 (umask 077), then renamed over .env
   grep -v "^$1=" .env > .env.new || true; [ -z "$2" ] || printf '%s=%s\n' "$1" "$2" >> .env.new; mv .env.new .env
 }
 setenv NODE_TOKEN "$TOKEN";              setenv GATEWAY_PORT "127.0.0.1:$PORT"   # local only: the node dials out
@@ -209,7 +228,13 @@ for ref in $($DOCKER compose config --images </dev/null | sort -u) \
   # the images map has "ref": "repo@sha256:…" on one line; the models image has its digest on the next line
   dig=$(grep -F -A1 "\"$ref\"" manifest.json | sed -n 's/.*"\([^"]*@sha256:[0-9a-f]\{64\}\)".*/\1/p' | head -n 1)
   [ -n "$dig" ] || die "образ $ref не описаний у підписаному маніфесті"
-  $DOCKER pull -q "$dig" </dev/null >/dev/null && $DOCKER tag "$dig" "$ref"
+  ok=""
+  for try in 1 2 3; do
+    if $DOCKER pull -q "$dig" </dev/null >/dev/null; then ok=1; break; fi
+    say "не вдалося завантажити $ref (спроба $try з 3)"; sleep $((try * 5))
+  done
+  [ -n "$ok" ] || die "не вдалося завантажити образ $ref: перевірте мережу й повторіть установлення"
+  $DOCKER tag "$dig" "$ref" || die "не вдалося позначити образ $ref"
 done
 
 # ---------- 7. start ----------

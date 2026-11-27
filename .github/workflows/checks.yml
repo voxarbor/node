@@ -2,9 +2,9 @@ name: checks
 # install.sh and prune.sh run on people's PCs: shellcheck and a dry run on every change
 on:
   push:
-    paths: ["install.sh", "prune.sh", ".github/workflows/checks.yml"]
+    paths: ["install.sh", "prune.sh", "tests/test_install.sh", ".github/workflows/checks.yml"]
   pull_request:
-    paths: ["install.sh", "prune.sh"]
+    paths: ["install.sh", "prune.sh", "tests/test_install.sh"]
 permissions:
   contents: read
 jobs:
@@ -24,3 +24,6 @@ jobs:
           ! sh install.sh --dry-run --join x                                         # no coordinator
           ! sh install.sh --dry-run --coordinator https://e.invalid --join x --services foo
           ! sh install.sh --dry-run --coordinator https://e.invalid --join 'x;rm'     # bad join code
+          ! sh install.sh --dry-run --coordinator http://e.invalid --join x                         # plain http
+      - name: install.sh against fake docker and curl (pull failure, .env mode, uninstall, http)
+        run: sh tests/test_install.sh
