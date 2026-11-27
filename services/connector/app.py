@@ -53,7 +53,7 @@ IDLE_S = float(os.environ.get("CONNECT_IDLE_S", "600"))
 CAPS_EVERY = 30.0
 REQ_HEADERS = {"content-type", "accept", "last-event-id", "range", "x-request-id"}
 RES_HEADERS = {"content-type", "content-length", "content-disposition", "retry-after"}
-PATHS = ("/stt/", "/tts/", "/translate/", "/diarize/", "/fetch/")
+PATHS = ("/stt/", "/tts/", "/translate/", "/diarize/", "/fetch/", "/gen/")  # /gen: Remotion Render (0.18.0+)
 METHODS = {"GET", "POST", "PUT", "DELETE", "PATCH", "HEAD"}
 
 log = logging.getLogger("connector")

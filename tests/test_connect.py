@@ -45,6 +45,12 @@ async def gw_big(r):
     return resp
 
 
+async def gw_gen(r):  # /gen (Remotion Render): the method and path arrive as sent
+    assert r.headers.get("Authorization") == "Bearer local"
+    await r.read()
+    return web.json_response({"method": r.method, "path": r.path}, status=202 if r.method == "POST" else 200)
+
+
 async def gw_slow(r):
     await asyncio.sleep(30)
     return web.Response(text="late")
@@ -154,6 +160,10 @@ async def main():
     gw.router.add_get("/stt/v1/big", gw_big)
     gw.router.add_get("/tts/v1/slow", gw_slow)
     gw.router.add_get("/tts/v1/sse", gw_sse)
+    gw.router.add_post("/gen/v1/jobs", gw_gen)
+    gw.router.add_get("/gen/v1/jobs/{id}", gw_gen)
+    gw.router.add_delete("/gen/v1/jobs/{id}", gw_gen)
+    gw.router.add_get("/gen/v1/files/{sha}", gw_gen)
     co = Coord()
     ca = web.Application()
     ca.router.add_post("/v1/nodes/enroll", co.enroll)
@@ -207,6 +217,15 @@ async def main():
         res, _ = await co.wait(5)
         assert res["end"]["code"] == "forbidden_path", res
         print("path allowlist ok")
+
+        sha = "a" * 64
+        for sid, method, path, code in ((30, "POST", "/gen/v1/jobs", 202), (31, "GET", "/gen/v1/jobs/r-1-0-1", 200),
+                                        (32, "GET", f"/gen/v1/files/{sha}", 200),
+                                        (33, "DELETE", "/gen/v1/jobs/r-1-0-1", 200)):
+            await co.req(sid, method, path, body='{"id": "r-1-0-1"}' if method == "POST" else None)
+            res, data = await co.wait(sid)
+            assert res["status"] == code and json.loads(data) == {"method": method, "path": path}, (res, data)
+        print("/gen forwarded (POST jobs, GET job, GET files, DELETE job)")
 
         await co.req(6, "GET", "/tts/v1/slow", deadline_ms=500)
         res, _ = await co.wait(6)
