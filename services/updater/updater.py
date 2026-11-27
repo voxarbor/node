@@ -449,6 +449,7 @@ class Updater:
                 self.up()
             except Exception as exc2:  # noqa: BLE001
                 log("rollback up failed:", exc2)
+            self.gateway_sync()
             failed = dict(self.st.d.get("failed") or {}, **{tag: now_iso()})
             self.st.set(state="rolled_back", error=str(exc)[:300], failed=failed,
                         last_update={"from": cur, "to": tag, "ok": False, "at": now_iso(), "error": str(exc)[:300]})
@@ -456,11 +457,35 @@ class Updater:
         self.st.set(state="idle", error=None,
                     last_update={"from": cur, "to": tag, "ok": True, "at": now_iso(), "error": None})
         log(f"updated to {tag}")
+        self.gateway_sync()
         cmd, env = self.p.compose()
         pr = run(["sh", os.path.join(self.p.wd, "prune.sh")], check=False,
                  env=dict(env, COMPOSE=" ".join(cmd)), timeout=1800)
         log("prune:", (pr.stdout or pr.stderr).strip().splitlines()[-1:] or "")
         self.replace_self()
+
+    def gateway_sync(self, only_when_quiet=False):
+        """The gateway (Caddy, admin API off) reads its Caddyfile only at start, and through a single-file bind mount
+        it keeps seeing the old file after an update replaced it (a new inode): its /gen route was missing for a day
+        on a node (2026-11-27). When the file the gateway container sees differs from the node's Caddyfile, restart
+        the gateway (~1 s). Returns True when it restarted."""
+        ids = run(["docker", "ps", "-q", "--filter", f"label=com.docker.compose.project={self.p.name}",
+                   "--filter", "label=com.docker.compose.service=gateway"], check=False).stdout.split()
+        try:
+            host = open(os.path.join(self.p.wd, "Caddyfile"), encoding="utf-8").read()
+        except OSError:
+            return False
+        if not ids:
+            return False
+        r = run(["docker", "exec", ids[0], "cat", "/etc/caddy/Caddyfile"], check=False)
+        if r.returncode == 0 and hashlib.sha256(r.stdout.encode()).digest() == hashlib.sha256(host.encode()).digest():
+            return False
+        if only_when_quiet and (busy_streams() or not tts_idle()):
+            return False  # viewers on the node: the next check (5 min) does it
+        if run(["docker", "restart", ids[0]], check=False).returncode == 0:
+            log("gateway restarted: it was running an older Caddyfile")
+            return True
+        return False
 
     def replace_self(self):
         """a container cannot recreate itself through compose: a one-shot copy of the new updater image does it,
@@ -630,11 +655,14 @@ class Updater:
                      timeout=1800)
             log("prune after self-replacement:", (pr.stdout or pr.stderr).strip().splitlines()[-1:] or "")
             self.st.set(pending_self=None)
-        errors = 0
+        errors, gw_check = 0, 0.0
         while True:
             try:
                 self.step()
                 self.join_code_cleanup()
+                if time.time() - gw_check > 300:  # a Caddyfile newer than the running gateway (updated before 0.5.1)
+                    gw_check = time.time()
+                    self.gateway_sync(only_when_quiet=True)
                 errors = 0
             except Exception as exc:  # noqa: BLE001
                 errors += 1

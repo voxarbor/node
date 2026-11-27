@@ -152,3 +152,10 @@ files on the node: old `update.sh` keeps working). From then on nodes update the
 The updater reuses the compose labels of its own container. Every file there (compose files, env file) must be
 visible inside it: the node folder is mounted (`.:/node`); files elsewhere (an override, an env file in another
 folder) need an extra bind mount at the same path in the override file, or `UPDATER_MODE=off`.
+
+## Gateway restart after a Caddyfile change (since 0.18.2)
+
+The gateway (Caddy, admin API off) reads its Caddyfile only at start, and through the single-file bind mount it keeps
+seeing the old file after an update replaced it. After every update or rollback, and every 5 minutes when no viewer
+is on the node, the updater compares the Caddyfile the gateway container sees with the node's and restarts the
+gateway (about a second) when they differ.
