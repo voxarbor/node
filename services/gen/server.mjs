@@ -430,6 +430,8 @@ async function health() {
 
 const server = http.createServer(async (req, res) => {
   const url = new URL(req.url, "http://x");
+  const t0 = Date.now();
+  res.on("finish", () => { const ms = Date.now() - t0; if (ms > 1000) log(`slow request: ${req.method} ${url.pathname} ${ms} ms`); });
   try {
     if (url.pathname === "/health") return json(res, 200, await health());
     if (req.headers.authorization !== `Bearer ${API_KEY}` || !API_KEY) return json(res, 401, { detail: "invalid token" });
@@ -472,6 +474,8 @@ process.on("uncaughtException", (e) => {
 });
 process.on("unhandledRejection", (e) => log("unhandled rejection:", e && e.stack || e));
 setInterval(() => { sampleLoad().catch(() => {}); pump().catch(() => {}); }, 5000);
+let tick = Date.now();  // event-loop lag: a blocked loop would delay every status request
+setInterval(() => { const lag = Date.now() - tick - 1000; if (lag > 1000) log(`event loop lagged ${lag} ms`); tick = Date.now(); }, 1000);
 setInterval(async () => {  // results the coordinator did not fetch and delete
   const cut = now() - OUTPUT_TTL_S;
   for (const j of [...jobs.values()]) if (j.ended && j.ended < cut) await drop(j);

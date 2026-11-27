@@ -51,6 +51,16 @@ async def gw_gen(r):  # /gen (Remotion Render): the method and path arrive as se
     return web.json_response({"method": r.method, "path": r.path}, status=202 if r.method == "POST" else 200)
 
 
+async def gw_gen_hold(r):  # a /gen request that never answers: notes when the connector drops it
+    events.setdefault("gen_aborted", 0)
+    for _ in range(300):
+        await asyncio.sleep(0.1)
+        if r.transport is None or r.transport.is_closing():
+            events["gen_aborted"] += 1
+            return web.Response(text="gone")
+    return web.Response(text="late")
+
+
 async def gw_slow(r):
     await asyncio.sleep(30)
     return web.Response(text="late")
@@ -165,6 +175,7 @@ async def main():
     gw.router.add_delete("/gen/v1/jobs/{id}", gw_gen)
     gw.router.add_get("/gen/v1/files/{sha}", gw_gen)
     gw.router.add_get("/gen/v1/slow", gw_slow)
+    gw.router.add_get("/gen/v1/hold", gw_gen_hold)
     co = Coord()
     ca = web.Application()
     ca.router.add_post("/v1/nodes/enroll", co.enroll)
@@ -246,6 +257,27 @@ async def main():
             res, _ = await co.wait(sid, 20)
             assert res["end"]["code"] == "deadline", res
         print("busy.json: viewers count viewer work only, not /gen")
+
+        # cancel of a /gen request still waiting for the gateway: the stream ends at once, the upstream request is
+        # dropped, the stream is no longer counted
+        await co.req(42, "GET", "/gen/v1/hold")
+        await asyncio.sleep(1)
+        t = time.time()
+        await co.ws.send_str(json.dumps({"type": "cancel", "id": 42}))
+        res, _ = await co.wait(42)
+        assert res["end"]["code"] == "cancelled" and time.time() - t < 2, (res, time.time() - t)
+        for _ in range(30):
+            await asyncio.sleep(0.2)
+            if events.get("gen_aborted"):
+                break
+        assert events.get("gen_aborted") == 1, events.get("gen_aborted")
+        for _ in range(40):
+            await asyncio.sleep(0.25)
+            b = json.load(open("/tmp/cctl/busy.json"))
+            if b["streams"] == 0:
+                break
+        assert b["streams"] == 0, b
+        print("cancel: stream closed at once, upstream request dropped, no longer counted")
 
         await co.req(6, "GET", "/tts/v1/slow", deadline_ms=500)
         res, _ = await co.wait(6)

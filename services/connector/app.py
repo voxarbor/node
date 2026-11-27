@@ -450,6 +450,9 @@ class Link:
         t0, body = time.monotonic(), bytearray()
         async with self.http.request(method, GATEWAY + path, headers=headers, data=data, allow_redirects=False,
                                      timeout=aiohttp.ClientTimeout(total=None, sock_connect=10, sock_read=3600)) as r:
+            waited = time.monotonic() - t0
+            if waited > 10 and not path.startswith(("/tts/", "/stt/", "/diarize/")):  # those may think that long
+                log.warning("slow upstream: %s %s answered %s after %.0f s", method, path[:80], r.status, waited)
             out = {k.lower(): v for k, v in r.headers.items()
                    if k.lower() in RES_HEADERS or k.lower().startswith("x-")}
             self.send_json({"type": "res", "id": s.id, "status": r.status, "headers": out})
