@@ -248,8 +248,17 @@ async function ensureBundle(job) {
   await fsp.mkdir(work);
   const head = Buffer.alloc(4);
   const fd = await fsp.open(tmp); await fd.read(head, 0, 4, 0); await fd.close();
-  if (head[0] === 0x50 && head[1] === 0x4b) await run("unzip", ["-q", tmp, "-d", work]);
-  else await run("tar", ["-xf", tmp, "-C", work, "--no-same-owner", "--no-same-permissions"]);
+  try {  // audit #11: a failed or too large unpack leaves nothing behind and is reported as such
+    if (head[0] === 0x50 && head[1] === 0x4b) await run("unzip", ["-q", tmp, "-d", work]);
+    else await run("tar", ["-xf", tmp, "-C", work, "--no-same-owner", "--no-same-permissions"]);
+    if ((await diskFreeGB(BUNDLES)) < MIN_FREE_GB) throw Object.assign(new Error(
+      `the unpacked bundle left less than ${MIN_FREE_GB} GB free on the disk`), { code: "disk_full" });
+  } catch (e) {
+    await fsp.rm(work, { recursive: true, force: true });
+    await fsp.rm(tmp, { force: true });
+    if (e.code !== "disk_full") e.code = /No space left/i.test(e.message) ? "disk_full" : "input_corrupt";
+    throw e;
+  }
   await fsp.rm(tmp, { force: true });
   const root = findRoot(work);
   if (!root) { await fsp.rm(work, { recursive: true, force: true }); throw Object.assign(
@@ -310,6 +319,7 @@ async function pump() {
     if (job.status !== "canceled") { job.status = "error"; job.error = e.message; job.error_code = e.code || job.error_code || "failed"; }
     log("job", job.id, job.status, job.error || "");
   } finally {
+    if (job.status !== "done" && job.partial) await fsp.rm(job.partial, { force: true }).catch(() => {});
     job.ended = now(); job.proc = null; running = null;
     setImmediate(pump);
   }
@@ -326,6 +336,9 @@ async function work(job) {
   const part = s.part || "video";
   await fsp.mkdir(OUT, { recursive: true });
   const file = path.join(OUT, `${job.id}.${part === "audio" ? "wav" : "mp4"}`);
+  job.partial = file;  // removed when the part does not end "done" (audit #11)
+  if ((await diskFreeGB(OUT)) < MIN_FREE_GB) throw Object.assign(new Error(
+    `less than ${MIN_FREE_GB} GB free on the disk for the output`), { code: "disk_full" });
   const req = { serveUrl: path.join(BUNDLES, job.input.sha256, meta.root), composition: s.composition, props: s.props || {},
                 part, frames: s.frames, codec: s.codec || "h264", crf: s.crf ?? 18, pix_fmt: s.pix_fmt || "yuv420p",
                 concurrency: Math.min(CORES, s.concurrency || CONCURRENCY),  // Remotion refuses more than CORES
@@ -354,9 +367,17 @@ async function work(job) {
     });
     p.stderr.on("data", (d) => { stderr = (stderr + d).slice(-2000); });
     p.stdin.end(JSON.stringify(req));
-    p.on("close", (code) => resolve({ code, last, stderr }));
+    const watch = setInterval(async () => {  // the output grows: stop before the disk is full (audit #11)
+      if ((await diskFreeGB(OUT).catch(() => Infinity)) < MIN_FREE_GB / 2) {
+        job.disk_full = true;
+        try { process.kill(-p.pid, "SIGKILL"); } catch { /* gone */ }
+      }
+    }, 5000);
+    p.on("close", (code) => { clearInterval(watch); resolve({ code, last, stderr }); });
   });
   if (job.status === "canceled") return;
+  if (job.disk_full) throw Object.assign(new Error(`the disk ran low (< ${MIN_FREE_GB / 2} GB free) while rendering`),
+                                         { code: "disk_full" });
   const last = res.last || (part === "info" && res.code === 0 && job.info ? { type: "info" } : null);
   if (!last || last.type === "error") {
     if (last?.frames_total) job.info = { ...(job.info || {}), frames_total: last.frames_total };
@@ -394,8 +415,10 @@ function cancel(job) {
 
 async function drop(job) {
   cancel(job);
-  for (const f of job.files || []) await fsp.rm(f, { force: true });
   jobs.delete(job.id);
+  // two parts can render to the same bytes (same sha256 = the same file): it goes with the last job using it (#22)
+  const inUse = new Set([...jobs.values()].flatMap((j) => j.files || []));
+  for (const f of job.files || []) if (!inUse.has(f)) await fsp.rm(f, { force: true });
 }
 
 function fpsHour() {
@@ -408,22 +431,29 @@ function fpsHour() {
 // ---------------------------------------------------------------- http ----------------------------------------
 async function serveFile(req, res, sha) {
   const f = [...jobs.values()].flatMap((j) => j.files || []).find((p) => path.basename(p).startsWith(sha + "."));
-  if (!f || !fs.existsSync(f)) return json(res, 404, { detail: "no such file" });
-  const size = (await fsp.stat(f)).size;
+  let fh;
+  try { fh = f && await fsp.open(f); } catch { fh = null; }
+  if (!fh) return json(res, 404, { detail: "no such file" });
+  const size = (await fh.stat()).size;
+  const send = (opts) => {  // from the open handle: a file removed meanwhile still streams; a read error ends the reply
+    const st = fh.createReadStream({ ...opts, autoClose: true });
+    st.on("error", () => res.destroy());
+    st.pipe(res);
+  };
   const type = f.endsWith(".wav") ? "audio/wav" : "video/mp4";
   const m = /^bytes=(\d*)-(\d*)$/.exec(req.headers.range || "");
   if (m && (m[1] || m[2])) {
     let start = m[1] ? Number(m[1]) : size - Number(m[2]);
     let end = m[1] && m[2] ? Number(m[2]) : size - 1;
     if (start < 0) start = 0;
-    if (start >= size || end < start) { res.writeHead(416, { "Content-Range": `bytes */${size}` }); return res.end(); }
+    if (start >= size || end < start) { await fh.close(); res.writeHead(416, { "Content-Range": `bytes */${size}` }); return res.end(); }
     end = Math.min(end, size - 1);
     res.writeHead(206, { "Content-Type": type, "Content-Length": end - start + 1, "Content-Range": `bytes ${start}-${end}/${size}`,
                          "Accept-Ranges": "bytes" });
-    return fs.createReadStream(f, { start, end }).pipe(res);
+    return send({ start, end });
   }
   res.writeHead(200, { "Content-Type": type, "Content-Length": size, "Accept-Ranges": "bytes" });
-  fs.createReadStream(f).pipe(res);
+  send({});
 }
 
 async function health() {
@@ -490,4 +520,6 @@ setInterval(async () => {  // results the coordinator did not fetch and delete
   for (const j of [...jobs.values()]) if (j.ended && j.ended < cut) await drop(j);
 }, 300000);
 fs.rmSync(OUT, { recursive: true, force: true });  // parts of a previous run are of no use (the coordinator retries)
+for (const d of (() => { try { return fs.readdirSync(BUNDLES); } catch { return []; } })())  // half-done downloads, unpacks
+  if (/^\.[0-9a-f]{64}\.\d+\.(part|dir)$/.test(d)) fs.rmSync(path.join(BUNDLES, d), { recursive: true, force: true });
 server.listen(8000, "0.0.0.0", () => log(`gen ${VERSION}: remotion ${REMOTION}, ${DEVICE}, gl ${GL_DEFAULT}, ${CORES} of ${HOST_CORES} cores, ${(memBytes() / 1e9).toFixed(1)} GB, ${CONCURRENCY} render threads by default`));

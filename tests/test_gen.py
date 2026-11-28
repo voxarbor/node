@@ -244,6 +244,35 @@ try:
     assert h["paused"] and h["busy"] and h["bundles"] == [], h  # a new container without the cache volume
     print("GEN_PAUSE ok")
 
+    # audit #22: two parts with the same bytes share one file; deleting the first keeps the second's file
+    docker_rm("gentest-gen")
+    subprocess.run(["docker", "volume", "rm", "gentest-cache"], capture_output=True)  # a clean cache for this part
+    h = start_gen("-v", "gentest-cache:/cache")
+    for jid in ("r-d-1", "r-d-2"):
+        assert call("POST", "/v1/jobs", job(jid, part="audio"))[0] == 202
+    o1, o2 = wait("r-d-1")["outputs"][0], wait("r-d-2")["outputs"][0]
+    assert o1["sha256"] == o2["sha256"], (o1, o2)
+    assert call("DELETE", "/v1/jobs/r-d-1")[0] == 200
+    fetch(o2["sha256"], os.path.join(work, "shared.wav"))
+    assert call("DELETE", "/v1/jobs/r-d-2")[0] == 200
+    assert call("GET", f"/v1/files/{o2['sha256']}")[0] == 404  # gone with the last job
+    print("#22 shared output survives the first delete ok")
+
+    # audit #11: too little disk for the output -> disk_full and no partial file; leftovers of a previous run go
+    sh("docker", "exec", "gentest-gen", "sh", "-c", f"mkdir -p /cache/bundles/.{'a' * 64}.1.part /cache/bundles/.{'b' * 64}.7.dir")
+    h = start_gen("-v", "gentest-cache:/cache", "-e", "GEN_MIN_FREE_GB=100000")
+    assert h["bundles"] == [SHA], h  # the cached bundle is kept
+    left = sh("docker", "exec", "gentest-gen", "sh", "-c", "ls -A /cache/bundles /cache/out 2>/dev/null || true").split()
+    assert not [x for x in left if x.endswith((".part", ".dir"))], left
+    call("POST", "/v1/jobs", job("r-f-1", part="video", frames=[0, 29]))
+    j = wait("r-f-1")
+    assert j["status"] == "error" and j["error_code"] == "disk_full", j
+    out = sh("docker", "exec", "gentest-gen", "sh", "-c", "ls -A /cache/out 2>/dev/null || true").split()
+    assert not out, out
+    print("#11 disk_full before rendering, no partial file, startup cleanup ok")
+    docker_rm("gentest-gen")
+    subprocess.run(["docker", "volume", "rm", "gentest-cache"], capture_output=True)
+
     # defaults without caps (0.18.6): cores from the machine, concurrency also bounded by RAM; and the compose file
     # gives gen cpu_shares 128 and no cpu / memory limit unless GEN_CPUS / GEN_MEM are set
     h = start_gen(limits=())
