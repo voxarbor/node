@@ -89,4 +89,86 @@ assert seen and all(m & 0o077 == 0 for m in seen), [oct(m) for m in seen]
 assert stat.S_IMODE(os.stat(env).st_mode) == 0o600 and "gen" in open(env).read()
 assert not [f for f in os.listdir(wd) if f.startswith(".env") and f != ".env"], os.listdir(wd)
 print("#29 .env temp file 0600 ok")
+
+# ---------- #10: a service the node runs must be up after an update ----------
+upd.TOKEN = "x"
+caps = {"product_version": "v9.9.9", "services": {"tts": {"available": False, "healthy": False},
+                                                  "translate": {"available": True, "healthy": True}}}
+upd.http_json = lambda url, headers=None, timeout=15: caps if "capabilities" in url else {"enabled": True, "connected": True}
+u.required_services = lambda: ["tts", "translate"]
+ok, why = u.healthy("v9.9.9")
+assert not ok and "tts" in (why or ""), (ok, why)
+caps["services"]["tts"] = {"available": True, "healthy": True}
+assert u.healthy("v9.9.9") == (True, None)
+print("#10 a required service that is down fails the update ok")
+
+# ---------- #43: the drain decides with fresh numbers in a later step ----------
+wish = {"version": "v9.9.9"}
+upd.desired = lambda: dict(wish)
+upd.effective_mode = lambda d: "auto"
+streams = [0]
+tts_free = [True]
+upd.busy_streams = lambda: streams[0]
+upd.tts_idle = lambda: tts_free[0]
+upd.WINDOW_S = 0
+applied = []
+u.p.tag = lambda: "v9.9.8"
+u.st = type("S", (), {"set": lambda self, **kw: None, "d": {}})()
+u.prepared, u.pulled, u.drain_since, u.idle_since = {"v9.9.9": {"files": {}}}, {"v9.9.9"}, None, None
+u.apply = lambda tag, man: applied.append(tag)
+u.drain_end = lambda: setattr(u, "drain_since", None)
+u.repair = lambda cur: None
+u.step()                       # quiet before: the drain starts, nothing is applied in the same step
+assert not applied, "applied in the step that only started draining"
+tts_free[0] = False            # a TTS job started meanwhile
+u.step()
+assert not applied, "applied while TTS was busy"
+tts_free[0] = True
+wish["paused"] = True          # and then the coordinator paused the node
+u.step()
+assert not applied and u.drain_since is None, "applied although paused"
+wish.pop("paused")
+u.step(); u.step()
+assert applied == ["v9.9.9"], applied
+print("#43 drain: fresh check, pause respected ok")
+
+# ---------- #9: an update cut off mid-way (SIGTERM, power) is rolled back at the next start ----------
+wd2 = tempfile.mkdtemp()
+env2 = os.path.join(wd2, ".env")
+open(env2, "w").write("VOXARBOR_NODE_TAG=v1.0.0\nOPUS_MODELS_TAG=2\n")
+for n in ("compose.yaml", "Caddyfile"):
+    open(os.path.join(wd2, n), "w").write("old " + n)
+cache2 = os.path.join(wd2, ".updater")
+os.makedirs(os.path.join(cache2, "v2.0.0"))
+for n in ("compose.yaml", "Caddyfile"):
+    open(os.path.join(cache2, "v2.0.0", n), "w").write("new " + n)
+p2 = object.__new__(upd.Project)
+p2.name, p2.wd, p2.env_file = "voxarbor-node", wd2, env2
+p2.own = lambda path: None
+u2 = object.__new__(upd.Updater)
+u2.p, u2.cache = p2, cache2
+u2.st = type("S", (), {"set": lambda self, **kw: None, "d": {}})()
+u2.opus_needed = lambda m: False
+u2.gateway_sync = lambda only_when_quiet=False: False
+
+
+def killed_up(files=None):
+    raise SystemExit("SIGTERM")  # not an Exception: the in-process rollback does not run
+
+
+u2.up = killed_up
+try:
+    u2.apply("v2.0.0", {"files": {"compose.yaml": "", "Caddyfile": ""}, "opus_models_tag": "3"})
+except SystemExit:
+    pass
+assert "VOXARBOR_NODE_TAG=v2.0.0" in open(env2).read()   # the disk says new, the containers are old
+u3 = object.__new__(upd.Updater)                          # the updater starts again
+u3.p, u3.cache, u3.st = p2, cache2, u2.st
+u3.up, u3.gateway_sync = (lambda files=None: None), (lambda only_when_quiet=False: False)
+assert u3.recover_interrupted() is True
+e = open(env2).read()
+assert "VOXARBOR_NODE_TAG=v1.0.0" in e and "OPUS_MODELS_TAG=2" in e, e
+assert open(os.path.join(wd2, "compose.yaml")).read() == "old compose.yaml"
+assert u3.recover_interrupted() is False                  # done once
+print("#9 interrupted update rolled back at the next start (tag, files, opus pin) ok")
 print("UPDATER RELEASE OK")

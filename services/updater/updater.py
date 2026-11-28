@@ -409,9 +409,14 @@ class Updater:
             return False, f"capabilities: {type(exc).__name__}"
         if caps.get("product_version") != tag:
             return False, f"node reports {caps.get('product_version')}"
-        bad = [k for k, s in (caps.get("services") or {}).items() if s.get("available") and not s.get("healthy")]
+        svcs = caps.get("services") or {}
+        bad = [k for k, s in svcs.items() if s.get("available") and not s.get("healthy")]
         if bad:
             return False, "unhealthy: " + ",".join(bad)
+        # audit #10: a service this node runs (compose, active profiles) that does not answer is a failed update too
+        missing = [k for k in self.required_services() if not (svcs.get(k) or {}).get("available")]
+        if missing:
+            return False, "not running: " + ",".join(missing)
         try:
             c = http_json(CONNECTOR, timeout=10)
             if c.get("enabled") and not c.get("connected"):
@@ -419,6 +424,17 @@ class Updater:
         except Exception as exc:  # noqa: BLE001
             return False, f"connector: {type(exc).__name__}"
         return True, None
+
+    def required_services(self):
+        """the gateway services this node's compose (with its profiles and scale-0 overrides) really runs"""
+        cmd, env = self.p.compose()
+        r = run(cmd + ["config", "--format", "json"], env=env, check=False)
+        try:
+            cfg = json.loads(r.stdout).get("services", {})
+        except ValueError:
+            return []
+        return [n for n, c in cfg.items() if n in ("stt", "tts", "translate", "diarize", "fetch", "gen")
+                and c.get("scale", 1) != 0 and (c.get("deploy") or {}).get("replicas", 1) != 0]
 
     def up(self, files=None):
         cmd, env = self.p.compose(files)
@@ -433,7 +449,8 @@ class Updater:
         for n in RELEASE_FILES:
             if os.path.exists(os.path.join(self.p.wd, n)):
                 shutil.copy2(os.path.join(self.p.wd, n), prev)
-        write_json(os.path.join(prev, "tag.json"), {"tag": cur})
+        write_json(os.path.join(prev, "tag.json"), {"tag": cur, "opus_pin": self.p.env_get("OPUS_MODELS_TAG")})
+        write_json(os.path.join(prev, "pending.json"), {"from": cur, "to": tag, "at": now_iso()})  # audit #9
         self.st.set(state="updating", error=None)
         log(f"updating {cur} -> {tag}")
         try:
@@ -461,20 +478,12 @@ class Updater:
                 raise RuntimeError(f"not healthy after {HEALTH_MIN:.0f} min: {why}")
         except Exception as exc:  # noqa: BLE001
             log("update failed:", exc, "- rolling back to", cur)
-            for n in RELEASE_FILES:
-                if os.path.exists(os.path.join(prev, n)):
-                    shutil.copy2(os.path.join(prev, n), os.path.join(self.p.wd, n))
-            if cur:
-                self.p.set_tag(cur)
-            try:
-                self.up()
-            except Exception as exc2:  # noqa: BLE001
-                log("rollback up failed:", exc2)
-            self.gateway_sync()
+            self.roll_back(prev)
             failed = dict(self.st.d.get("failed") or {}, **{tag: now_iso()})
             self.st.set(state="rolled_back", error=str(exc)[:300], failed=failed,
                         last_update={"from": cur, "to": tag, "ok": False, "at": now_iso(), "error": str(exc)[:300]})
             return
+        os.remove(os.path.join(prev, "pending.json"))
         self.st.set(state="idle", error=None,
                     last_update={"from": cur, "to": tag, "ok": True, "at": now_iso(), "error": None})
         log(f"updated to {tag}")
@@ -484,6 +493,38 @@ class Updater:
                  env=dict(env, COMPOSE=" ".join(cmd)), timeout=1800)
         log("prune:", (pr.stdout or pr.stderr).strip().splitlines()[-1:] or "")
         self.replace_self()
+
+    def roll_back(self, prev):
+        """the previous release files, tag and Opus pin back, the node up again (also after an interrupted update)"""
+        for n in RELEASE_FILES:
+            if os.path.exists(os.path.join(prev, n)):
+                shutil.copy2(os.path.join(prev, n), os.path.join(self.p.wd, n))
+        old = read_json(os.path.join(prev, "tag.json"), {}) or {}
+        if old.get("tag"):
+            self.p.set_tag(old["tag"])
+        if (self.p.env_get("OPUS_MODELS_TAG") or None) != (old.get("opus_pin") or None):
+            self.p.env_write("OPUS_MODELS_TAG", old.get("opus_pin") or None)
+        try:
+            self.up()
+        except Exception as exc2:  # noqa: BLE001
+            log("rollback up failed:", exc2)
+        self.gateway_sync()
+        with contextlib.suppress(OSError):
+            os.remove(os.path.join(prev, "pending.json"))
+
+    def recover_interrupted(self):
+        """audit #9: an update cut off between changing the files and its health check (restart, power loss, SIGTERM)
+        left the new tag in .env while the containers may still be the old ones: roll it back; the next step retries"""
+        prev = os.path.join(self.cache, "prev")
+        pend = read_json(os.path.join(prev, "pending.json"))
+        if not pend:
+            return False
+        log(f"the update {pend.get('from')} -> {pend.get('to')} was interrupted: rolling back")
+        self.roll_back(prev)
+        self.st.set(state="rolled_back", error="interrupted update rolled back",
+                    last_update={"from": pend.get("from"), "to": pend.get("to"), "ok": False, "at": now_iso(),
+                                 "error": "interrupted"})
+        return True
 
     def gateway_sync(self, only_when_quiet=False):
         """The gateway (Caddy, admin API off) reads its Caddyfile only at start, and through a single-file bind mount
@@ -619,6 +660,12 @@ class Updater:
             self.drain_since = time.time()
             self.st.set(state="draining", draining_since=now_iso(), drain_timeout_s=int(DRAIN_S))
             log(f"draining before the update to {tag} (up to {DRAIN_S:.0f} s)")
+            return  # audit #43: "quiet" above is from before the pull; decide in the next step, after the drain is seen
+        d = desired()  # fresh, right before the change: the wish or a pause may have changed while draining
+        if d.get("paused") or d.get("version") != tag:
+            self.drain_end()
+            return
+        quiet = busy_streams() == 0 and tts_idle()
         if not quiet and time.time() - self.drain_since < DRAIN_S:
             return
         self.drain_end()
@@ -670,6 +717,10 @@ class Updater:
             self.retired_cleanup()
         except Exception as exc:  # noqa: BLE001
             log("retired cleanup:", exc)
+        try:
+            self.recover_interrupted()
+        except Exception as exc:  # noqa: BLE001
+            log("interrupted update recovery:", exc)
         if self.st.d.get("pending_self"):
             # first start after replacing myself: the previous updater image is free now, prune it too
             cmd, env = self.p.compose()
