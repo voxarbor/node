@@ -20,7 +20,10 @@ assert "versions" not in m["settings"], m["settings"]
 assert m["fps"] == 3.1 and m["bundles"] == ["a" * 64] and m["slots"] == 1 and m["kind"] == "render", m
 old = {k: v for k, v in gen.items() if k != "versions"}  # a gen before 0.1.x without "versions"
 assert {x["id"]: x for x in ni.models({"gen": old})}["remotion"]["versions"] == ["4.0.545"]
-print("#17 models[].versions ok")
+assert "lease_s_max" not in m, m                       # an older gen: no lease offered
+m = {x["id"]: x for x in ni.models({"gen": dict(gen, lease_s_max=86400)})}["remotion"]
+assert m["lease_s_max"] == 86400, m
+print("#17 models[].versions, #38 lease_s_max ok")
 stt = {"available": True, "healthy": True, "model": "Systran/faster-whisper-small", "model_revision": "abc123"}
 w = [x for x in ni.models({"stt": stt}) if x["kind"] == "stt"][0]
 assert w["id"] == "whisper-small" and w["revision"] == "Systran/faster-whisper-small@abc123", w

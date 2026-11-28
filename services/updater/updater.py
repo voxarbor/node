@@ -32,6 +32,10 @@ GENTLE = os.environ.get("NODE_MODE", "") == "gentle"
 TOKEN = os.environ.get("API_KEY", "")
 GATEWAY = os.environ.get("GATEWAY_URL", "http://gateway:8080")
 TTS = os.environ.get("TTS_HEALTH_URL", "http://tts:8000/health")
+GEN = os.environ.get("GEN_HEALTH_URL", "http://gen:8000/health")
+# /gen work outlives a viewer drain: a part renders for minutes, its result waits for the coordinator up to
+# GEN_OUTPUT_TTL_S (2 h); the update waits for gen up to this long
+GEN_DRAIN_S = float(os.environ.get("UPDATER_GEN_DRAIN_S", "10800"))
 CONNECTOR = os.environ.get("CONNECTOR_HEALTH_URL", "http://connector:8000/health")
 RELEASE_FILES = ("compose.yaml", "compose.gpu.yaml", "Caddyfile", "prune.sh")
 WORKFLOW = ".github/workflows/release.yml"
@@ -304,6 +308,15 @@ def tts_idle():
         return not h.get("busy") and not sum((h.get("jobs") or {}).values())
     except Exception:  # noqa: BLE001
         return True  # tts not running is not a reason to wait
+
+
+def gen_idle():
+    """audit #16: no /gen part running or queued and no finished result waiting for the coordinator to fetch it"""
+    try:
+        h = http_json(GEN, timeout=10)
+    except Exception:  # noqa: BLE001
+        return True  # gen off or not running: nothing to wait for
+    return not h.get("running") and not h.get("queued") and not h.get("unfetched")
 
 
 def desired():
@@ -666,7 +679,10 @@ class Updater:
             self.drain_end()
             return
         quiet = busy_streams() == 0 and tts_idle()
-        if not quiet and time.time() - self.drain_since < DRAIN_S:
+        waited = time.time() - self.drain_since
+        if not quiet and waited < DRAIN_S:
+            return
+        if waited < GEN_DRAIN_S and not gen_idle():  # viewers are not enough: /gen jobs and their files too (#16)
             return
         self.drain_end()
         self.apply(tag, man)

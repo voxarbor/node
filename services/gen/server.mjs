@@ -67,6 +67,10 @@ export const SETTINGS = {
 };
 
 const jobs = new Map();      // id -> job
+// audit #38: a job POSTed with lease_s is canceled when the coordinator has not asked about it (status, its files)
+// for that long: a part it gave to another node does not keep rendering here. Finished files are left to the TTL.
+const LEASE_MAX_S = 86400;
+const touch = (j) => { j.seen = now(); };
 const queue = [];            // ids waiting
 let running = null;          // the job being worked on
 const perf = [];             // [time, frames, seconds] of video parts, last hour
@@ -296,7 +300,9 @@ function validate(body) {
   if (s.remotion_version && s.remotion_version !== REMOTION) err(`unsupported_remotion_version: this node renders ${REMOTION}`);
   const inp = (body.inputs || []).find((i) => i && i.role === "bundle");
   if (!inp || !/^[0-9a-f]{64}$/.test(inp.sha256 || "")) err("inputs: [{role: \"bundle\", sha256}] required");
-  return { settings: s, input: { sha256: inp.sha256, bytes: Number(inp.bytes) || 0 } };
+  if (body.lease_s !== undefined && !(Number.isInteger(body.lease_s) && body.lease_s >= 60 && body.lease_s <= LEASE_MAX_S))
+    err(`lease_s: integer 60..${LEASE_MAX_S}`);
+  return { settings: s, input: { sha256: inp.sha256, bytes: Number(inp.bytes) || 0 }, lease_s: body.lease_s || 0 };
 }
 
 function view(j) {
@@ -430,7 +436,9 @@ function fpsHour() {
 
 // ---------------------------------------------------------------- http ----------------------------------------
 async function serveFile(req, res, sha) {
-  const f = [...jobs.values()].flatMap((j) => j.files || []).find((p) => path.basename(p).startsWith(sha + "."));
+  const own = [...jobs.values()].filter((j) => (j.files || []).some((p) => path.basename(p).startsWith(sha + ".")));
+  own.forEach(touch);
+  const f = own.flatMap((j) => j.files).find((p) => path.basename(p).startsWith(sha + "."));
   let fh;
   try { fh = f && await fsp.open(f); } catch { fh = null; }
   if (!fh) return json(res, 404, { detail: "no such file" });
@@ -461,6 +469,9 @@ async function health() {
   return { status: "ok", version: VERSION, remotion: REMOTION, device: DEVICE, gl_default: GL_DEFAULT, slots: 1,
            busy: Boolean(running) || Boolean(reason), busy_reason: running ? "rendering" : reason,
            paused: env.GEN_PAUSE === "1", running: running ? running.id : null, queued: queue.length,
+           // finished results the coordinator has not fetched and deleted yet: the updater waits for them (#16)
+           unfetched: [...jobs.values()].filter((j) => j.status === "done" && (j.files || []).length).length,
+           lease_s_max: LEASE_MAX_S,
            bundles: cachedBundles(), cache_gb: CACHE_GB, perf: fpsHour(), settings: SETTINGS, versions: [REMOTION],
            cores: CORES, host_cores: HOST_CORES, concurrency_default: CONCURRENCY,
            memory_gb: Math.round(memBytes() / 1e8) / 10,
@@ -483,7 +494,7 @@ const server = http.createServer(async (req, res) => {
       const old = jobs.get(body.id);
       if (old) return json(res, 202, view(old));  // the same id again: the same job (idempotent)
       const job = { id: body.id, ...v, status: "queued", progress: 0, frames_done: 0, frames: null, outputs: [],
-                    created: now(), abort: new AbortController() };
+                    created: now(), seen: now(), abort: new AbortController() };
       jobs.set(job.id, job); queue.push(job.id);
       setImmediate(pump);
       return json(res, 202, view(job));
@@ -491,11 +502,14 @@ const server = http.createServer(async (req, res) => {
     if ((m = /^\/v1\/jobs\/([^/]+)$/.exec(url.pathname))) {
       const job = jobs.get(decodeURIComponent(m[1]));
       if (!job) return json(res, 404, { detail: "no such job" });
+      touch(job);
       if (req.method === "GET") return json(res, 200, view(job));
       if (req.method === "DELETE") { const was = job.status; await drop(job); return json(res, 200, { id: job.id, status: was === "done" ? "deleted" : "canceled" }); }
     }
-    if (req.method === "GET" && url.pathname === "/v1/jobs")
+    if (req.method === "GET" && url.pathname === "/v1/jobs") {
+      for (const j of jobs.values()) touch(j);
       return json(res, 200, { jobs: [...jobs.values()].map(view) });
+    }
     if (req.method === "GET" && (m = /^\/v1\/files\/([0-9a-f]{64})$/.exec(url.pathname))) return serveFile(req, res, m[1]);
     json(res, 404, { detail: "not found" });
   } catch (e) {
@@ -512,7 +526,14 @@ process.on("uncaughtException", (e) => {
   }
 });
 process.on("unhandledRejection", (e) => log("unhandled rejection:", e && e.stack || e));
-setInterval(() => { sampleLoad().catch(() => {}); pump().catch(() => {}); }, 5000);
+function expireLeases() {
+  for (const j of jobs.values()) {
+    if (!j.lease_s || ["done", "error", "canceled"].includes(j.status) || now() - j.seen <= j.lease_s) continue;
+    log("job", j.id, `lease expired: no request about it for ${j.lease_s} s`);
+    cancel(j); j.error = `lease expired: no request about it for ${j.lease_s} s`; j.error_code = "lease_expired";
+  }
+}
+setInterval(() => { expireLeases(); sampleLoad().catch(() => {}); pump().catch(() => {}); }, 5000);
 let tick = Date.now();  // event-loop lag: a blocked loop would delay every status request
 setInterval(() => { const lag = Date.now() - tick - 1000; if (lag > 1000) log(`event loop lagged ${lag} ms`); tick = Date.now(); }, 1000);
 setInterval(async () => {  // results the coordinator did not fetch and delete

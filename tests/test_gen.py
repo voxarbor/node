@@ -216,6 +216,25 @@ try:
     assert wait("r-1-b-1")["status"] == "done"
     print("busy ok")
 
+    # #38 lease: a part nobody asks about for lease_s is canceled (the coordinator gave it to another node);
+    # a part without lease_s waits on. #16: health counts results not fetched yet.
+    h = json.load(urllib.request.urlopen(f"http://127.0.0.1:{PORT}/health"))
+    assert h.get("lease_s_max") == 86400 and "unfetched" in h, h
+    assert call("POST", "/v1/jobs", {**job("r-l-1", part="info"), "lease_s": 30})[0] == 422  # under 60
+    json.dump({"streams": 1, "at": time.time()}, open(os.path.join(ctl, "busy.json"), "w"))
+    assert call("POST", "/v1/jobs", {**job("r-l-1", part="info"), "lease_s": 60})[0] == 202
+    assert call("POST", "/v1/jobs", job("r-l-2", part="info"))[0] == 202
+    for _ in range(14):        # 70 s: keep the viewer "on" (busy.json older than 30 s counts as unknown)
+        json.dump({"streams": 1, "at": time.time()}, open(os.path.join(ctl, "busy.json"), "w"))
+        time.sleep(5)
+    j = json.loads(_call("GET", "/v1/jobs/r-l-1")[1])
+    assert j["status"] == "canceled" and j["error_code"] == "lease_expired", j
+    j = json.loads(_call("GET", "/v1/jobs/r-l-2")[1])
+    assert j["status"] in ("paused", "queued"), j
+    os.remove(os.path.join(ctl, "busy.json"))
+    assert wait("r-l-2")["status"] == "done"
+    print("#38 lease: an unasked part is canceled, one without lease_s waits ok")
+
     # large bundles (~320 MB, three cold downloads from an HTTP/1.0 server that closes the connection): the
     # download must not take gen down (undici's fetch did, 3 of 6 times at 600 MB)
     import tarfile

@@ -55,6 +55,13 @@ REQ_HEADERS = {"content-type", "accept", "last-event-id", "range", "x-request-id
 RES_HEADERS = {"content-type", "content-length", "content-disposition", "retry-after"}
 PATHS = ("/stt/", "/tts/", "/translate/", "/diarize/", "/fetch/", "/gen/")  # /gen: Remotion Render (0.18.0+)
 VIEWER_PATHS = ("/stt/", "/tts/", "/translate/", "/diarize/", "/fetch/")
+# audit #16: while draining only new work is refused; the coordinator still follows, collects and cancels /gen jobs
+_DRAIN_OK = re.compile(r"(GET|HEAD) /capabilities|(GET|HEAD) /gen/v1/jobs(/[^/]+)?|(GET|HEAD) /gen/v1/files/[0-9a-f]{64}"
+                       r"|DELETE /gen/v1/jobs/[^/]+")
+
+
+def drain_ok(method: str, path: str) -> bool:
+    return bool(_DRAIN_OK.fullmatch(f"{method} {path.split('?')[0]}"))
 METHODS = {"GET", "POST", "PUT", "DELETE", "PATCH", "HEAD"}
 
 log = logging.getLogger("connector")
@@ -407,7 +414,7 @@ class Link:
         s.viewer = path.startswith(VIEWER_PATHS)
         if len(self.streams) > self.max_streams:
             return self.fail(s, "too_many_streams", f"more than {self.max_streams} streams")
-        if (updater_brief() or {}).get("state") == "draining":  # the node is about to update: send it elsewhere
+        if (updater_brief() or {}).get("state") == "draining" and not drain_ok(method, path):
             return self.fail(s, "draining", "the node is finishing its tasks before an update")
         if method not in METHODS or ".." in path or not (path.startswith(PATHS) or path.split("?")[0] == "/capabilities"):
             return self.fail(s, "forbidden_path", f"{method} {path[:80]} is not forwarded")

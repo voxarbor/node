@@ -257,6 +257,8 @@ def models(services: dict) -> list[dict]:
                        settings=ge.get("settings") or NO_SETTINGS, bundles=ge.get("bundles") or [],
                        versions=ge.get("versions") or [ge["remotion"]], fps=(ge.get("perf") or {}).get("fps"),
                        perf=ge.get("perf"), slots=ge.get("slots", 1))
+        if ge.get("lease_s_max"):  # gen 0.1.7+: POST /gen/v1/jobs takes lease_s (60..lease_s_max), audit #38
+            out[-1]["lease_s_max"] = ge["lease_s_max"]
     return out
 
 

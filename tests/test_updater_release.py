@@ -132,6 +132,24 @@ u.step(); u.step()
 assert applied == ["v9.9.9"], applied
 print("#43 drain: fresh check, pause respected ok")
 
+# ---------- #16: no viewers is not enough: /gen parts and their unfetched results hold the update ----------
+gen = {"running": "part-1", "queued": 0, "unfetched": 0}
+upd.http_json = lambda url, timeout=10: dict(gen) if "gen" in url else {}
+applied.clear()
+wish["version"] = "v9.9.9"
+u.drain_since = None
+upd.DRAIN_S = 0                 # the viewer drain is over at once
+u.step()                        # starts draining
+u.step()
+assert not applied, "applied while a /gen part was rendering"
+gen.update(running=None, unfetched=1)
+u.step()
+assert not applied, "applied while a /gen result waited for the coordinator"
+gen.update(unfetched=0)
+u.step()
+assert applied == ["v9.9.9"], applied
+print("#16 drain waits for /gen parts and unfetched results ok")
+
 # ---------- #9: an update cut off mid-way (SIGTERM, power) is rolled back at the next start ----------
 wd2 = tempfile.mkdtemp()
 env2 = os.path.join(wd2, ".env")
