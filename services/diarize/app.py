@@ -32,6 +32,12 @@ CONTEXT_S = float(os.environ.get("DIARIZE_CONTEXT_S", "60"))  # windows re-read 
 MIN_OVERLAP_S = 2.0  # shared speech needed to carry a speaker id over from the previous window
 MAX_UPLOAD = 1024 * 1024 * 1024
 WORK = os.environ.get("DIARIZE_WORK", "/tmp/diarize")
+# audit #28: decoded audio lives in a RAM-backed tmpfs: at most this much audio per upload (16 kHz float: 230 MB/h),
+# ffmpeg at most DECODE_TIMEOUT s, one decode at a time, and the slot is taken before the upload is copied
+MAX_AUDIO_S = float(os.environ.get("DIARIZE_MAX_AUDIO_S", str(4 * 3600)))
+DECODE_TIMEOUT = float(os.environ.get("DIARIZE_DECODE_TIMEOUT", "900"))
+_decode_one = asyncio.Semaphore(1)
+_admitted = 0
 
 app = FastAPI(title="diarize")
 bearer = HTTPBearer(auto_error=False)
@@ -108,21 +114,29 @@ async def _decode(upload: UploadFile) -> tuple[str, float]:
     d = tempfile.mkdtemp(dir=WORK)
     src, dst = os.path.join(d, "input"), os.path.join(d, "audio.wav")
     size = 0
-    with open(src, "wb") as f:
-        while chunk := await upload.read(1 << 20):
-            size += len(chunk)
-            if size > MAX_UPLOAD:
-                shutil.rmtree(d, ignore_errors=True)
-                raise HTTPException(413, "file larger than 1 GB")
-            f.write(chunk)
-    proc = await asyncio.create_subprocess_exec(
-        "ffmpeg", "-v", "error", "-nostdin", "-i", src, "-vn", "-ac", "1", "-ar", str(worker.SR),
-        "-c:a", "pcm_f32le", dst, stderr=asyncio.subprocess.PIPE)
-    _, err = await proc.communicate()
-    os.remove(src)
-    if proc.returncode != 0:
+    try:
+        with open(src, "wb") as f:
+            while chunk := await upload.read(1 << 20):
+                size += len(chunk)
+                if size > MAX_UPLOAD:
+                    raise HTTPException(413, "file larger than 1 GB")
+                f.write(chunk)
+        async with _decode_one:
+            proc = await asyncio.create_subprocess_exec(
+                "ffmpeg", "-v", "error", "-nostdin", "-i", src, "-vn", "-ac", "1", "-ar", str(worker.SR),
+                "-t", str(MAX_AUDIO_S), "-c:a", "pcm_f32le", dst, stderr=asyncio.subprocess.PIPE)
+            try:
+                _, err = await asyncio.wait_for(proc.communicate(), DECODE_TIMEOUT)
+            except asyncio.TimeoutError:
+                proc.kill()
+                await proc.wait()
+                raise HTTPException(504, f"decoding took over {DECODE_TIMEOUT:.0f} s") from None
+        os.remove(src)
+        if proc.returncode != 0:
+            raise HTTPException(422, f"cannot decode audio: {err.decode(errors='replace')[-300:]}")
+    except BaseException:  # any failure (also a full tmpfs) leaves no folder behind
         shutil.rmtree(d, ignore_errors=True)
-        raise HTTPException(422, f"cannot decode audio: {err.decode(errors='replace')[-300:]}")
+        raise
     import soundfile as sf
 
     return dst, sf.info(dst).frames / worker.SR
@@ -199,6 +213,18 @@ async def diarize(request: Request, file: UploadFile | None = File(None), sessio
     if offset < 0 or (duration is not None and duration <= 0):
         raise HTTPException(422, "offset >= 0, duration > 0")
     s = _sessions.get(session) if session else None
+    global _admitted
+    if _admitted >= QUEUE_MAX:  # before copying and decoding the upload (#28)
+        raise HTTPException(429, f"busy: {QUEUE_MAX} jobs queued, retry later")
+    _admitted += 1
+    try:
+        return await _diarize(s, file, session, offset, duration, num_speakers, min_speakers, max_speakers,
+                              threshold, started)
+    finally:
+        _admitted -= 1
+
+
+async def _diarize(s, file, session, offset, duration, num_speakers, min_speakers, max_speakers, threshold, started):
     if file is not None:
         path, audio_s = await _decode(file)
         if s:  # a new file for an existing session replaces its audio and speakers
