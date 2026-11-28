@@ -52,17 +52,27 @@ printf '#!/bin/sh\nexit 0\n' > "$T/bin/sleep"
 chmod +x "$T/bin/"*
 export PATH="$T/bin:$PATH" HOME="$T/home"
 
-# ---------- 1. a failed pull stops the installation, .env stays 0600 ----------
+# ---------- 1. a failed pull stops the installation; nothing of the node is switched (audit #26) ----------
 umask 022
-out=$(cd "$T" && FAIL_PULL=1 NODE_DIR="$T/node" sh "$ROOT/install.sh" --coordinator https://c.invalid --join j_1 \
-      --services stt --gpu off 2>&1) && fail "install went on after a failed pull: $out"
+run_install() { (cd "$T" && NODE_DIR="$T/node" sh "$ROOT/install.sh" --coordinator https://c.invalid --join j_1 \
+                 --services stt --gpu off 2>&1); }
+out=$(FAIL_PULL=1 run_install) && fail "install went on after a failed pull: $out"
 echo "$out" | grep -q "не вдалося завантажити образ ghcr.io/voxarbor/node-tts:v0.0.1" || fail "no pull error: $out"
 grep -q "compose up" "$T/docker.log" && fail "compose up ran after a failed pull"
-[ "$(stat -c '%a' "$T/node/.env")" = 600 ] || fail ".env is $(stat -c '%a' "$T/node/.env")"
+[ ! -e "$T/node/compose.yaml" ] && [ ! -e "$T/node/.env" ] || fail "a failed fresh install left node files"
+[ ! -e "$T/node/.install-new" ] || fail "staging folder left behind"
+# a full run (it stops at the connector wait: the fake node never connects) puts the files in place
+out=$(run_install) && fail "the fake node connected?"
+[ -f "$T/node/compose.yaml" ] && [ "$(stat -c '%a' "$T/node/.env")" = 600 ] || fail "files not switched: $out"
 grep -qv '^600$' "$T/envmodes" && fail ".env was readable by others at some point: $(sort -u "$T/envmodes" | tr '\n' ' ')"
 [ ! -e "$T/node/.env.new" ] || fail ".env.new left behind"
-ls -l "$T/node/.env" | grep -q '^-rw-------' || fail ".env mode"
-echo "pull failure stops the install; .env 0600 all the time ok"
+# a reinstall that fails half-way leaves the running node's files and settings as they were
+echo "# the running node" >> "$T/node/compose.yaml"; echo "MINE=1" >> "$T/node/.env"
+before=$(cat "$T/node/compose.yaml" "$T/node/.env" | sha256sum)
+out=$(FAIL_PULL=1 run_install) && fail "reinstall went on after a failed pull"
+[ "$(cat "$T/node/compose.yaml" "$T/node/.env" | sha256sum)" = "$before" ] || fail "a failed reinstall changed the node's files"
+[ ! -e "$T/node/.install-new" ] || fail "staging folder left behind after a failed reinstall"
+echo "failed pull: nothing switched, reinstall keeps the node; .env 0600 all the time ok"
 
 # ---------- 2. uninstall: --dry-run touches nothing; odd folders are refused ----------
 : > "$T/docker.log"

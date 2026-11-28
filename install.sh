@@ -171,15 +171,20 @@ fi
 # ---------- 4. release: check the signatures, then the files ----------
 if [ -n "$RELEASE" ]; then BASE="https://github.com/$REPO/releases/download/$RELEASE"
 else BASE="https://github.com/$REPO/releases/latest/download"; fi
-mkdir -p "$DIR" && cd "$DIR"
-say "завантажую реліз у $DIR і перевіряю підпис (cosign)"
+# audit #26: everything is prepared in a staging folder (release files, .env, images); the node's own files are
+# switched only after all of it succeeded, so a failed reinstall leaves the running node as it was
+mkdir -p "$DIR"
+STAGE="$DIR/.install-new"
+rm -rf "$STAGE" && mkdir "$STAGE" && cd "$STAGE"
+trap 'rm -rf "$STAGE"' EXIT
+say "завантажую реліз і перевіряю підпис (cosign)"
 for f in SHA256SUMS SHA256SUMS.sigstore.json manifest.json manifest.json.sigstore.json; do
   curl -fsSL "$BASE/$f" -o "$f" || die "не вдалося завантажити $f"
 done
 TAG=$(sed -n 's/^ *"version": *"\(v[0-9][0-9.]*\)".*/\1/p' manifest.json | head -n 1)
 [ -n "$TAG" ] || die "manifest.json без версії"
 for f in SHA256SUMS manifest.json; do   # signer must be this repository's release workflow at this very tag
-  $DOCKER run --rm -v "$DIR:/w" -w /w "$COSIGN" verify-blob "$f" --bundle "$f.sigstore.json" \
+  $DOCKER run --rm -v "$STAGE:/w" -w /w "$COSIGN" verify-blob "$f" --bundle "$f.sigstore.json" \
     --certificate-identity "https://github.com/$REPO/.github/workflows/release.yml@refs/tags/$TAG" \
     --certificate-oidc-issuer https://token.actions.githubusercontent.com </dev/null >/dev/null 2>&1 \
     || die "$f: підпис релізу не підтверджено"
@@ -194,7 +199,7 @@ chmod 644 compose.yaml Caddyfile env.example SHA256SUMS manifest.json; [ -z "$GP
 
 # ---------- 5. .env: settings of this node (mode 600, the token never leaves this PC) ----------
 umask 077   # from here on files are private to this user: .env holds the node token (also while it is rewritten)
-[ -f .env ] || cp env.example .env
+if [ -f "$DIR/.env" ]; then cp "$DIR/.env" .env; else cp env.example .env; fi   # a copy: the node's .env changes at the end
 chmod 600 .env
 N=$(nproc 2>/dev/null || echo 4); half=$((N / 2)); [ "$half" -ge 2 ] || half=2; quarter=$((N / 4)); [ "$quarter" -ge 1 ] || quarter=1
 TOKEN=$(sed -n 's/^NODE_TOKEN=\([0-9a-f]\{32,\}\)$/\1/p' .env); [ -n "$TOKEN" ] || TOKEN=$(od -An -N32 -tx1 /dev/urandom | tr -d ' \n')
@@ -236,6 +241,11 @@ for ref in $($DOCKER compose config --images </dev/null | sort -u) \
   [ -n "$ok" ] || die "не вдалося завантажити образ $ref: перевірте мережу й повторіть установлення"
   $DOCKER tag "$dig" "$ref" || die "не вдалося позначити образ $ref"
 done
+
+# ---------- switch: the verified release and settings replace the node's files ----------
+for f in $FILES SHA256SUMS SHA256SUMS.sigstore.json manifest.json manifest.json.sigstore.json .env; do mv -f "$f" "$DIR/$f"; done
+if [ -f compose.override.yaml ]; then mv -f compose.override.yaml "$DIR/"; else rm -f "$DIR/compose.override.yaml"; fi
+cd "$DIR" && rm -rf "$STAGE"; trap - EXIT
 
 # ---------- 7. start ----------
 say "копіюю моделі перекладу в том (один раз) і запускаю вузол"
