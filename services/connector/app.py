@@ -145,6 +145,26 @@ def ws_url(base: str) -> str:
     return urlunsplit((scheme, u.netloc, u.path.rstrip("/") + "/v1/nodes/connect", "", ""))
 
 
+def coord_key(base: str) -> str:
+    """the coordinator a token belongs to: scheme://host:port/path, lower-case host, no trailing slash"""
+    u = urlsplit(base.strip())
+    port = f":{u.port}" if u.port else ""
+    return f"{u.scheme.lower()}://{(u.hostname or '').lower()}{port}{u.path.rstrip('/')}"
+
+
+def node_state() -> dict | None:
+    """this node's credentials for the current COORDINATOR_URL only (audit #5): after the URL changed the token of
+    the previous coordinator is never sent to the new one; the node enrolls there with NODE_JOIN_CODE instead.
+    A state from before 0.18.7 has no "coordinator": it is taken as this coordinator's and marked so."""
+    st = load(STATE)
+    if not st:
+        return None
+    if "coordinator" not in st:
+        st["coordinator"] = coord_key(COORDINATOR_URL)
+        save(STATE, st)
+    return st if st["coordinator"] == coord_key(COORDINATOR_URL) else None
+
+
 def ssl_context() -> ssl.SSLContext | None:
     ctx = ssl.create_default_context()
     if INSECURE:
@@ -198,7 +218,7 @@ async def enroll(http: aiohttp.ClientSession, node_id: str | None = None) -> dic
     st = load(ENROLL_STATE) or {}
     if st.get("code") != JOIN_CODE:
         st = {"code": JOIN_CODE, "request_id": secrets.token_hex(16)}
-    node_id = node_id or st.get("node_id") or (load(STATE) or {}).get("node_id")
+    node_id = node_id or st.get("node_id") or (node_state() or {}).get("node_id")
     if node_id:
         st["node_id"] = node_id
     save(ENROLL_STATE, st)
@@ -209,7 +229,7 @@ async def enroll(http: aiohttp.ClientSession, node_id: str | None = None) -> dic
         if r.status == 200:
             d = await r.json()
             save(STATE, {"node_id": d["node_id"], "node_token": d["node_token"], "enrolled": time.time(),
-                         "join_code_sha256": code_sha(JOIN_CODE)})
+                         "join_code_sha256": code_sha(JOIN_CODE), "coordinator": coord_key(COORDINATOR_URL)})
             try:
                 os.remove(ENROLL_STATE)
             except OSError:
@@ -604,6 +624,12 @@ async def main_loop() -> None:
     if not COORDINATOR_URL:
         log.info("COORDINATOR_URL not set: idle")
         return
+    try:  # audit #5: refuse a plain-http coordinator before any request (enroll would send the join code)
+        ws_url(COORDINATOR_URL)
+    except (ValueError, KeyError) as exc:
+        log.error("%s: not connecting", exc if isinstance(exc, ValueError) else f"COORDINATOR_URL scheme {exc}")
+        status.update(connected=False, last_error="COORDINATOR_URL must be https://")
+        return
     backoff = 1.0
     # two clients: the tunnel passes the local gateway's bytes through untouched (auto_decompress=False); the
     # coordinator's own HTTP replies (enroll) are ordinary HTTP and may come compressed (a CDN gzips JSON)
@@ -611,7 +637,7 @@ async def main_loop() -> None:
         while True:
             started = time.monotonic()
             try:
-                state = load(STATE)
+                state = node_state()
                 if state is None:
                     if not JOIN_CODE:
                         raise Retry(600, "not enrolled: set NODE_JOIN_CODE")
@@ -658,7 +684,7 @@ async def media(request: web.Request) -> web.StreamResponse:
     if request.headers.get("Authorization") != f"Bearer {LOCAL_TOKEN}" or not LOCAL_TOKEN:
         return web.json_response({"detail": "invalid token"}, status=401)
     sha = request.match_info["sha"]
-    st = load(STATE) or {}
+    st = node_state() or {}
     if not SHA_RE.fullmatch(sha):
         return web.json_response({"detail": "sha256 expected"}, status=400)
     if not COORDINATOR_URL or not st.get("node_token"):
