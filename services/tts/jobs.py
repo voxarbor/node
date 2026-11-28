@@ -77,7 +77,12 @@ class Jobs:
                     m = json.load(f)
             except (OSError, ValueError):
                 continue
+            if m.get("delete_requested"):  # deleted while running, then the service stopped (#45)
+                shutil.rmtree(self._dir(jid), True)
+                continue
             self.meta[jid] = m
+            if m.get("cancel_requested") and m["status"] in ("queued", "running"):
+                m["status"], m["ended"] = "canceled", time.time()
             if m["status"] in ("queued", "running"):
                 m["status"] = "queued"
                 pending.append(jid)
@@ -160,6 +165,8 @@ class Jobs:
             self._save(jid)
         elif m["status"] == "running":
             self.stop.add(jid)
+            m["cancel_requested"] = True  # kept on disk: a restart before the job ends does not lose it (#45)
+            self._save(jid)
         await self._notify()
         return self.public(m)
 
@@ -168,6 +175,8 @@ class Jobs:
         if m["status"] == "running":
             self.stop.add(jid)
             self.drop.add(jid)  # the runner removes it after the current segment
+            m["delete_requested"] = True  # kept on disk: a restart before the runner gets there still deletes (#45)
+            self._save(jid)
         else:
             self.meta.pop(jid)
             await asyncio.to_thread(shutil.rmtree, self._dir(jid), True)
@@ -218,7 +227,10 @@ class Jobs:
                 m = self.meta.get(jid)
                 if m is not None:
                     m["status"], m["error"], m["updated"], m["ended"] = "error", f"{type(exc).__name__}: {exc}", _now(), time.time()
-                    self._save(jid)
+                    try:  # audit #32: on a full disk this write fails too; it must not end the runner
+                        self._save(jid)
+                    except OSError as exc2:
+                        print(f"job {jid}: status not saved: {exc2!r}", flush=True)
                 await self._notify()
 
     async def _process(self, jid: str) -> None:
@@ -262,10 +274,18 @@ class Jobs:
             await asyncio.to_thread(shutil.rmtree, self._dir(jid), True)
             await self._notify()
             return
-        canceled = jid in self.stop
-        self.stop.discard(jid)
         if any(s["done"] and s["duration_s"] for s in m["segments"]):
             m["audio"] = await asyncio.to_thread(self._assemble, jid)
+        # audit #45: a cancel or delete may arrive while the audio is assembled: decide after it, not before
+        if jid in self.drop:
+            self.stop.discard(jid)
+            self.drop.discard(jid)
+            self.meta.pop(jid, None)
+            await asyncio.to_thread(shutil.rmtree, self._dir(jid), True)
+            await self._notify()
+            return
+        canceled = jid in self.stop
+        self.stop.discard(jid)
         m["duration_s"] = round(sum(s["duration_s"] + (s["pause_after_ms"] / 1000 if s is not m["segments"][-1] else 0)
                                     for s in m["segments"] if s["done"] and s.get("duration_s")), 2)
         m["status"] = "error" if error else "canceled" if canceled else "done"
