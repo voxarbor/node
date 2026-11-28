@@ -109,16 +109,21 @@ class Slot:
         _busy -= 1
 
 
+async def gate() -> None:
+    """every yt-dlp start: refused while resting after a bot check, spaced by MIN_INTERVAL (audio included: #31)"""
+    left = BOT_COOLDOWN - (time.monotonic() - _state["bot_at"])
+    if _state["bot_at"] and left > 0:
+        raise HTTPException(429, {"error": "bot_check", "detail": f"resting after a bot check, {left:.0f} s left"})
+    async with _pace:  # spaced starts, also when the coordinator sends several at once
+        wait = MIN_INTERVAL - (time.monotonic() - _state["last_start"])
+        if wait > 0:
+            await asyncio.sleep(wait)
+        _state["last_start"] = time.monotonic()
+
+
 async def run(args: list[str], timeout: float) -> tuple[int, bytes, str]:
     if args[0] == "yt-dlp" and "--version" not in args:
-        left = BOT_COOLDOWN - (time.monotonic() - _state["bot_at"])
-        if _state["bot_at"] and left > 0:
-            raise HTTPException(429, {"error": "bot_check", "detail": f"resting after a bot check, {left:.0f} s left"})
-        async with _pace:  # spaced starts, also when the coordinator sends several at once
-            wait = MIN_INTERVAL - (time.monotonic() - _state["last_start"])
-            if wait > 0:
-                await asyncio.sleep(wait)
-            _state["last_start"] = time.monotonic()
+        await gate()
     p = await asyncio.create_subprocess_exec(*args, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
     try:
         out, err = await asyncio.wait_for(p.communicate(), timeout)
@@ -253,17 +258,30 @@ async def audio(request: Request) -> StreamingResponse:
     url = youtube_url((await request.json()).get("url"))
     slot = Slot()
     await slot.__aenter__()
+    try:
+        await gate()
+    except BaseException:
+        await slot.__aexit__(None, None, None)
+        raise
     tmp = tempfile.mkdtemp()
     extf = os.path.join(tmp, "ext")
     args = base_args() + cookies_args(tmp) + ["-f", "bestaudio", "--print-to-file", "before_dl:%(ext)s", extf,
                                              "-o", "-", "--", url]
     p = await asyncio.create_subprocess_exec(*args, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
                                              limit=1 << 20)
+    errbuf = bytearray()
+
+    async def read_err() -> None:  # read stderr all along: a full pipe would stall yt-dlp (#31)
+        while chunk := await p.stderr.read(1 << 14):
+            errbuf.extend(chunk[-8192:])
+            del errbuf[:-8192]
+    errtask = asyncio.create_task(read_err())
 
     async def cleanup() -> None:
         if p.returncode is None:
             p.kill()
         await p.wait()
+        errtask.cancel()
         shutil.rmtree(tmp, ignore_errors=True)
         await slot.__aexit__(None, None, None)
 
@@ -273,7 +291,9 @@ async def audio(request: Request) -> StreamingResponse:
         await cleanup()
         raise HTTPException(504, {"error": "timeout", "detail": "no audio data from yt-dlp"})
     if not first:
-        err = (await p.stderr.read()).decode(errors="replace")
+        await p.wait()
+        await asyncio.wait_for(errtask, 5)
+        err = errbuf.decode(errors="replace")
         await cleanup()
         raise fail(err)
     ext = open(extf).read().strip() if os.path.isfile(extf) else "bin"
@@ -285,8 +305,11 @@ async def audio(request: Request) -> StreamingResponse:
             while chunk := await asyncio.wait_for(p.stdout.read(1 << 16), max(1, deadline - time.monotonic())):
                 yield chunk
             await p.wait()
-            if p.returncode == 0:
-                ok()
+            if p.returncode != 0:  # failed after the first bytes: end the transfer as an error, not a short 200 (#31)
+                await asyncio.wait_for(errtask, 5)
+                fail(errbuf.decode(errors="replace"))  # notes a bot check (rest) like the other routes
+                raise RuntimeError(f"yt-dlp exited {p.returncode} during the audio stream")
+            ok()
         finally:
             await cleanup()
 
