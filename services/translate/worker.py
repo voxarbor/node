@@ -103,13 +103,17 @@ def nllb_code(lang: str) -> str:
     return code
 
 
+class PairUnavailable(ValueError):
+    """this node cannot translate the pair (no Opus-MT model and NLLB is off): another node may (audit #40)"""
+
+
 def route(source: str, target: str) -> str:
     """Model name for a pair of NLLB codes."""
     pair = OPUS_TO_UK.get(ISO.get(source, "")) if target == "ukr_Cyrl" else None
     if pair and os.path.isfile(f"{OPUS_DIR}/{pair}/model.bin") and os.environ.get("TRANSLATE_OPUS", "1") == "1":
         return "opus:" + pair
     if not nllb_enabled():
-        raise ValueError(f"{source} -> {target} needs NLLB-200, which is off (CC-BY-NC license: non-commercial "
+        raise PairUnavailable(f"{source} -> {target} needs NLLB-200, which is off (CC-BY-NC license: non-commercial "
                          f"use only); set TRANSLATE_NLLB=1 to enable it, or translate from a language with an "
                          f"Opus-MT model to Ukrainian")
     return os.environ.get("TRANSLATE_MODEL", "nllb-600m")

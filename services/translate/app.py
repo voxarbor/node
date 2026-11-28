@@ -237,7 +237,9 @@ async def translate(req: TranslateRequest, request: Request) -> dict:
                                             st.get("beam_size", req.beam_size), st.get("max_length", worker.MAX_TOKENS),
                                             st.get("repetition_penalty", 1.1), request=request)
             PERF.add(len(sentences), time.monotonic() - t0)
-        except ValueError as exc:  # e.g. a pair that needs the opt-in NLLB
+        except worker.PairUnavailable as exc:  # the request is fine, this node lacks the pair: X-Error-Code tells the
+            raise HTTPException(422, str(exc), headers={"X-Error-Code": "pair_unavailable"})  # coordinator to try another
+        except ValueError as exc:
             raise HTTPException(422, str(exc))
     it = iter(translated)
     outs = [next(it) if u else "" for u, _ in units]
