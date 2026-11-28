@@ -20,7 +20,7 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
-        with: { fetch-depth: 2 }
+        with: { fetch-depth: 0 }   # the whole push range (changed.sh)
       - uses: docker/setup-buildx-action@v3
       - uses: docker/login-action@v3
         with: { registry: ghcr.io, username: "${{ github.actor }}", password: "${{ secrets.GITHUB_TOKEN }}" }
@@ -28,7 +28,7 @@ jobs:
         run: |
           av=ghcr.io/voxarbor/node-base-av:$(cat services/base-av/VERSION)
           tv=$(cat services/base-torch/VERSION)
-          changed() { git diff --name-only HEAD~1 HEAD 2>/dev/null | grep -q "^services/$1/" \
+          changed() { sh .github/changed.sh "${{ github.event.before }}" HEAD "^services/$1/" \
                       || ! docker manifest inspect "$2" >/dev/null 2>&1; }
           lbl="--label org.opencontainers.image.source=https://github.com/voxarbor/node"
           if changed base-av "$av"; then
@@ -57,12 +57,12 @@ jobs:
           - { service: updater, image: updater, args: "" }
     steps:
       - uses: actions/checkout@v4
-        with: { fetch-depth: 2 }
+        with: { fetch-depth: 0 }   # the whole push range (changed.sh)
       - name: changed?
         id: changed
         run: |
-          if [ "${{ github.event_name }}" = workflow_dispatch ] || ! git rev-parse -q --verify HEAD~1 >/dev/null \
-             || git diff --name-only HEAD~1 HEAD | grep -qE '^(services/${{ matrix.service }}/|services/base-|VERSION$|\.github/workflows/images\.yml)'; then
+          if [ "${{ github.event_name }}" = workflow_dispatch ] || sh .github/changed.sh "${{ github.event.before }}" HEAD \
+               '^(services/${{ matrix.service }}/|services/base-|VERSION$|\.github/workflows/images\.yml)'; then
             echo build=true >> "$GITHUB_OUTPUT"
           fi
       - name: version
@@ -73,8 +73,13 @@ jobs:
           v=$(cat services/$s/VERSION)
           # v<VERSION> (what nodes pin) only for a release: a VERSION change or "Run workflow"; a plain push to main must
           # not move the tag of the current release onto untested images
-          if [ "${{ github.event_name }}" = workflow_dispatch ] || git diff --name-only HEAD~1 HEAD | grep -qx VERSION; then
-            echo "release=v$(cat VERSION)" >> "$GITHUB_OUTPUT"; else echo "release=" >> "$GITHUB_OUTPUT"; fi
+          rel=""
+          if [ "${{ github.event_name }}" = workflow_dispatch ] || sh .github/changed.sh "${{ github.event.before }}" HEAD '^VERSION$'; then
+            rel="v$(cat VERSION)"; fi
+          # a published release keeps its images: its tag is never moved onto another build (audit #19)
+          if [ -n "$rel" ] && git ls-remote --exit-code --tags origin "refs/tags/$rel" >/dev/null 2>&1; then
+            echo "::warning::$rel is already released: its images are not re-tagged"; rel=""; fi
+          echo "release=$rel" >> "$GITHUB_OUTPUT"
           echo "version=$v" >> "$GITHUB_OUTPUT"; echo "sha=$(git rev-parse --short=12 HEAD)" >> "$GITHUB_OUTPUT"
       - uses: docker/setup-buildx-action@v3
         if: steps.changed.outputs.build

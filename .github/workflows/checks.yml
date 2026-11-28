@@ -2,7 +2,7 @@ name: checks
 # install.sh and prune.sh run on people's PCs: shellcheck and a dry run on every change
 on:
   push:
-    paths: ["install.sh", "prune.sh", "tests/test_install.sh", ".github/workflows/checks.yml"]
+    paths: ["install.sh", "prune.sh", "tests/test_install.sh", "tests/test_ci.sh", ".github/changed.sh", ".github/release_manifest.py", ".github/workflows/checks.yml"]
   pull_request:
     paths: ["install.sh", "prune.sh", "tests/test_install.sh"]
 permissions:
@@ -27,3 +27,5 @@ jobs:
           ! sh install.sh --dry-run --coordinator http://e.invalid --join x                         # plain http
       - name: install.sh against fake docker and curl (pull failure, .env mode, uninstall, http)
         run: sh tests/test_install.sh
+      - name: CI release safety (changed.sh over the push, manifest = the tagged commit's build)
+        run: sh tests/test_ci.sh

@@ -32,4 +32,10 @@ man = {
 bad = [r for r in man["images"] if f":{tag}" not in r and "/node-" in r]
 if bad:
     sys.exit(f"images not at {tag}: {bad}")
+# every node image of the release must be the build of this very commit (audit #19): images.yml tags what its run
+# built or re-tagged for a commit as sha-<12>; v<tag> pointing elsewhere means a tag moved or a stale build
+sha = subprocess.run(["git", "rev-parse", "--short=12", "HEAD"], capture_output=True, text=True, check=True).stdout.strip()
+moved = [r for r, d in man["images"].items() if "/node-" in r and digest(r.rsplit(":", 1)[0] + f":sha-{sha}") != d]
+if moved:
+    sys.exit(f"images at {tag} are not the build of commit {sha}: {moved}")
 json.dump(man, sys.stdout, indent=1)
