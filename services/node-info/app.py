@@ -226,6 +226,8 @@ def models(services: dict) -> list[dict]:
     if "available" in stt and stt.get("model"):
         add(_whisper_id(stt["model"]), "stt", "faster-whisper", "stt", stt, at(stt["model"], stt.get("model_revision")),
             "mit", vram=VRAM_GB["whisper"])
+        if stt.get("model_installed") is False:  # set to a model speaches does not have: do not offer it
+            out[-1]["available"] = False
         out[-1]["settings"] = STT_SETTINGS
     tr = services.get("translate") or {}
     if "available" in tr:  # translate and punctuation run on CPU on every node
@@ -326,6 +328,10 @@ def capabilities() -> dict:
             elif name == "stt":
                 s.update(model=STT_MODEL, endpoints=["/v1/audio/transcriptions"], engine="faster-whisper (speaches)",
                          model_revision=_stt_revision())
+                try:  # audit #46: the model the node is set to must really be installed in speaches
+                    s["model_installed"] = STT_MODEL in [m.get("id") for m in get(f"{url}/v1/models", timeout=3).get("data", [])]
+                except Exception:  # noqa: BLE001  an older speaches or a slow answer: unknown, not missing
+                    s["model_installed"] = None
             elif name == "fetch":
                 s["features"] = h.get("features", [])   # "list": POST /fetch/v1/list (0.13.5+)
                 s["resting_s"] = h.get("resting_s")       # > 0: cooling down after a YouTube bot check
