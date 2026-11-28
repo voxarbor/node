@@ -6,6 +6,7 @@ busy.json {streams, at}. Output: status.json (node-info shows it in /capabilitie
 state and seq in every ping). The coordinator can only name a version; files, digests and the signature come from
 GitHub and are verified here.
 """
+import contextlib
 import hashlib
 import json
 import os
@@ -15,6 +16,7 @@ import signal
 import socket
 import subprocess
 import sys
+import tempfile
 import time
 import urllib.request
 
@@ -140,12 +142,18 @@ class Project:
         if value is not None and not done:
             out.append(f"{key}={value}")
         st = os.stat(self.env_file)
-        tmp = self.env_file + ".updater-tmp"
-        with open(tmp, "w") as f:
-            f.write("\n".join(out) + "\n")
-        os.chmod(tmp, st.st_mode & 0o7777)
-        os.chown(tmp, st.st_uid, st.st_gid)  # the owner must keep running docker compose himself
-        os.replace(tmp, self.env_file)
+        # mkstemp: a unique file created 0600, so the token is never readable by others while .env is rewritten
+        fd, tmp = tempfile.mkstemp(prefix=".env.", dir=os.path.dirname(self.env_file) or ".")
+        try:
+            with open(fd, "w") as f:
+                f.write("\n".join(out) + "\n")
+                os.fchown(f.fileno(), st.st_uid, st.st_gid)  # the owner must keep running docker compose himself
+                os.fchmod(f.fileno(), st.st_mode & 0o7777)
+            os.replace(tmp, self.env_file)
+        except BaseException:
+            with contextlib.suppress(OSError):
+                os.remove(tmp)
+            raise
 
     def own(self, path):
         """files and folders the updater creates in the node folder belong to the folder's owner, not root"""
@@ -234,15 +242,18 @@ def human(exc) -> str:
     return t[:200]
 
 
-def fetch_release(tag, dest):
+def _fetch_release(tag, dest):
     """Downloads the release's node files + manifest, verifies the signature (cosign keyless, our workflow on that
-    tag) and every file's sha256. Returns the manifest."""
+    tag) and every file's sha256. Returns the manifest. Everything is downloaded into <dest>.part and moved to <dest>
+    only after all checks passed: a failed check leaves nothing in the cache that a later step could trust."""
     rel = http_json(f"https://api.github.com/repos/{REPO}/releases/tags/{tag}", {"Accept": "application/vnd.github+json"})
     assets = {a["name"]: a["browser_download_url"] for a in rel.get("assets", [])}
     for n in ("manifest.json", "manifest.json.sigstore.json"):
         if n not in assets:
             raise RuntimeError(f"release {tag} has no {n}")
-    os.makedirs(dest, exist_ok=True)
+    final, dest = dest, dest.rstrip("/") + ".part"
+    shutil.rmtree(dest, ignore_errors=True)
+    os.makedirs(dest)
 
     def get(name):
         with urllib.request.urlopen(assets[name], timeout=120) as r, open(os.path.join(dest, name), "wb") as f:
@@ -265,7 +276,17 @@ def fetch_release(tag, dest):
         get(name)
         if hashlib.sha256(open(os.path.join(dest, name), "rb").read()).hexdigest() != sha:
             raise RuntimeError(f"{name}: sha256 mismatch")
+    shutil.rmtree(final, ignore_errors=True)
+    os.replace(dest, final)
     return man
+
+
+def fetch_release(tag, dest):
+    try:
+        return _fetch_release(tag, dest)
+    except BaseException:
+        shutil.rmtree(dest.rstrip("/") + ".part", ignore_errors=True)  # unverified downloads go, never into dest
+        raise
 
 
 # ---------------------------------------------------------------- node load --------------------------------------
@@ -507,7 +528,8 @@ class Updater:
             return
         self._repair_at = time.monotonic()  # each check starts a short container: at most once a minute
         try:
-            man = self.prepared.get(cur) or read_json(os.path.join(self.cache, cur, "manifest.json"))
+            # only a manifest verified in this process: one left on disk may come from a failed signature check
+            man = self.prepared.get(cur)
             if not man:
                 man = self.prepared[cur] = fetch_release(cur, os.path.join(self.cache, cur))
             if not self.opus_needed(man):
